@@ -91,9 +91,9 @@ flowchart LR
     fs[("recordings/<br/>CSV + JSON")]
   end
   ant["ANT USB Stick 2<br/>VID 0FCF PID 1008<br/>libusb-win32 driver"]
-  hrb["Heart-rate strap<br/>ANT device type 120"]
-  spd["Speed sensors<br/>ANT type 121 (speed + cadence) and 123 (speed)"]
-  watch["Watch / HR over BLE"]
+  hrb["Heart-rate strap<br/>ANT type 120 or Bluetooth"]
+  spd["Speed and cadence sensors<br/>ANT type 121, 123, or Bluetooth CSC"]
+  watch["Bluetooth sensors<br/>HR strap, speed and cadence"]
   trainer["Elite Qubo Power Fluid<br/>(trainer, power model)"]
   bike["Orbea Orca on trainer"]
 
@@ -126,9 +126,10 @@ flowchart TB
   end
   subgraph L3["Application / domain"]
     ride["ride.py<br/>RideState + RideEngine"]
-    workout["workout.py<br/>intervals, ghosts, gradients"]
+    workout["workout.py<br/>intervals, gradients"]
     sensors["sensors.py<br/>sensor roles"]
     sim["sim.py<br/>simulated rider"]
+    bots["bots.py<br/>other riders"]
   end
   subgraph L4["Models (pure physics)"]
     phys["physics.py<br/>road physics"]
@@ -139,7 +140,7 @@ flowchart TB
     antses["ant/session.py<br/>channels, reader thread"]
     antproto["ant/protocol.py + profiles.py<br/>frames, device decoders"]
     antusb["ant/usbdev.py<br/>libusb via pyusb"]
-    blemod["ble.py<br/>bleak heart-rate client"]
+    blemod["ble.py<br/>bleak: heart rate and speed/cadence clients"]
     rec["recorder.py<br/>CSV + session.json"]
   end
 
@@ -155,6 +156,7 @@ flowchart TB
   ride --> power
   ride --> gear
   ride --> rec
+  ride --> bots
   workout --> phys
   workout --> power
   workout --> gear
@@ -175,7 +177,7 @@ flowchart LR
   ride["ride.py<br/>RideState, RideEngine"]
   workout["workout.py<br/>Workout dataclass"]
   sensors["sensors.py<br/>SensorRoles"]
-  ble["ble.py<br/>BleHeartRate"]
+  ble["ble.py<br/>BleHeartRate, BleCsc"]
   sim["sim.py<br/>SimulatedRider"]
   gear["gear.py"]
   physics["physics.py<br/>RoadPhysics"]
@@ -223,9 +225,9 @@ flowchart LR
 <pre class="mermaid">
 flowchart LR
   rhtml["static/ride.html<br/>layout, HUD tiles, panels"]
-  main["ride/main.js<br/>controller, API calls, SSE,<br/>start gate, presets, ghost table"]
+  main["ride/main.js<br/>controller, API calls, SSE,<br/>start gate, presets, other-riders checkbox"]
   hud["ride/hud.js<br/>HUD tiles, timeline"]
-  world["ride/world.js<br/>road, rider rig, ghosts,<br/>scenery, camera, sun"]
+  world["ride/world.js<br/>road, rider rig, other riders,<br/>scenery, camera, sun"]
   sens["ride/sensors.js<br/>sensor check dialog"]
   audio["ride/audio.js<br/>countdown and phase beeps"]
   three["static/vendor/three.module.min.js<br/>Three.js r170"]
@@ -270,7 +272,7 @@ sequenceDiagram
   RS->>RS: gearing (only without a cadence source; a live combined sensor counts as one)
   RE->>API: tick (snapshot)
   API-->>UI: SSE event
-  UI->>UI: update HUD tiles, move rider and ghosts
+  UI->>UI: update HUD tiles, move rider and other riders
 </pre>
 
   <h3>5b. Start a workout ride</h3>
@@ -284,7 +286,7 @@ sequenceDiagram
   participant E as RideEngine
   participant REC as recorder.py
 
-  R->>P: choose workout, preset, ghost mode
+  R->>P: choose workout, preset
   P->>A: POST /api/workout (shorthand or fields)
   A->>W: Workout(...) / parse_shorthand
   W-->>A: to_dict()
@@ -317,8 +319,8 @@ sequenceDiagram
       <td>ANT stick lifecycle, raw scan and send for debugging.</td></tr>
     <tr><td>Sensors</td><td><code>/api/sensors</code>, <code>/search</code>, <code>/select</code>, <code>/reset</code></td>
       <td>Channel search and pairing; sensor role selection.</td></tr>
-    <tr><td>BLE</td><td><code>/api/ble/scan</code>, <code>/start</code>, <code>/stop</code>, <code>/state</code></td>
-      <td>Watch heart rate via bleak.</td></tr>
+    <tr><td>BLE</td><td><code>/api/ble/scan</code>, <code>/start</code>, <code>/stop</code>, <code>/csc/start</code>, <code>/csc/stop</code>, <code>/state</code></td>
+      <td>Heart rate and speed/cadence sensors via bleak.</td></tr>
     <tr><td>Workout</td><td><code>GET/POST /api/workout</code></td><td>Build and read the interval workout.</td></tr>
     <tr><td>Ride</td><td><code>/api/ride/start</code>, <code>/pause</code>, <code>/resume</code>, <code>/stop</code>, <code>GET /state</code></td>
       <td>Control the RideEngine.</td></tr>
@@ -342,7 +344,7 @@ sequenceDiagram
         <li><b>Python 3.11</b></li>
         <li><b>Flask</b> (&gt;= 3.0): web server, routes, SSE</li>
         <li><b>pyusb</b> (&gt;= 1.2): USB access to the ANT stick (libusb-win32 driver, <code>libusb0.dll</code>)</li>
-        <li><b>bleak</b>: Bluetooth LE heart-rate client</li>
+        <li><b>bleak</b>: Bluetooth LE heart-rate and speed/cadence clients</li>
         <li><b>numpy</b>, <b>matplotlib</b>, <b>pillow</b>: analysis and plots</li>
         <li><b>esprima</b>: syntax check of page JS only (no <code>?.</code> / <code>??</code>)</li>
         <li><b>unittest</b>: test runner (<code>python -m unittest discover -s tests</code>)</li>
@@ -363,7 +365,7 @@ sequenceDiagram
       <ul>
         <li><b>ANT USB Stick 2</b>, ANT 2.4 GHz, up to 8 channels</li>
         <li><b>ANT+ profiles</b>: heart rate (type 120), speed (type 123), combined speed and cadence (type 121)</li>
-        <li><b>Bluetooth LE</b> heart rate via laptop adapter</li>
+        <li><b>Bluetooth LE</b> heart rate and Cycling Speed &amp; Cadence via laptop adapter</li>
         <li><b>Elite Qubo Power Fluid</b> trainer (power model fitted to 2 points + manufacturer chart)</li>
         <li><b>Dynastream libusb-win32</b> driver</li>
       </ul>
@@ -430,10 +432,10 @@ flowchart TB
   <p class="lead">From <code>HANDOVER.md</code> section 5, priority order.</p>
 <pre class="mermaid">
 flowchart TD
-  o1["1. Ghost legs and wheels missing<br/>(translucent material blends with road?)"]
+  o1["1. Other riders: check in the browser (name tags, toasts, 60/40 split) on a real ride"]
   o2["2. History page: route exists, static/history.html missing"]
   o3["3. 3D view not browser-tested since last changes"]
-  o4["4. Ghost pace settings still starting point for parameterized ghosts"]
+  o4["4. Ghost code removed; other riders replace it"]
   o5["5. Recordings not verified end to end with virtual cadence and gear"]
   o6["6. Not yet asked: separate speed multiplier input, README, config for mass and CdA"]
   o1 --> o3

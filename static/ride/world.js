@@ -930,10 +930,11 @@ export function createWorld(container, onFps = () => {}) {
     broadCrown.count = broadTrunk.count = bc;
     for (const im of [pineCone, pineTrunk, broadCrown, broadTrunk]) im.instanceMatrix.needsUpdate = true;
 
-    // fence posts every 8 m on both sides (strong motion cue)
+    // fence posts every 25 m on both sides (spacing from the user's road reference)
+    const POST_SPACING = 25;
     let np = 0;
-    for (let k = Math.floor((dNow - D_BACK) / 8); k <= Math.floor((dNow + D_AHEAD) / 8); k++) {
-      const dRel = k * 8 - dNow;
+    for (let k = Math.floor((dNow - D_BACK) / POST_SPACING); k <= Math.floor((dNow + D_AHEAD) / POST_SPACING); k++) {
+      const dRel = k * POST_SPACING - dNow;
       if (dRel < -D_BACK || dRel > D_AHEAD) continue;
       for (const side of [-1, 1]) {
         if (np < 120) {
@@ -1078,7 +1079,7 @@ export function createWorld(container, onFps = () => {}) {
     // no up/down bounce: the bike stays on the road. It rocks left and right in sync with the pedals
     // (one roll per crank turn, peaking when the crank is at 3 and 9 o'clock).
     bike.position.y = WHEEL_R;
-    bike.rotation.z = cadence > 0 ? -ROCK_RAD * Math.sin(crankAngle) : 0;   // sign flipped: the roll ran the wrong way
+    bike.rotation.z = cadence > 0 ? ROCK_RAD * Math.cos(crankAngle) : 0;   // cos = sin shifted by 90 degrees, and sign flipped: 180 degrees in total   // sign flipped: the roll ran the wrong way
     rider.pose(crankAngle, cadence > 0);
 
     // other riders: the server lists who is on the road, and where, at each snapshot. Between
