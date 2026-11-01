@@ -13,6 +13,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+from bots import Traffic
 from gear import GEAR_RATIOS, GEARS, MAX_RATIO, MIN_RATIO, START_GEAR, cadence_for, choose_gear, gear_ratio
 from physics import RoadPhysics
 from power import TrainerPowerModel
@@ -48,6 +49,7 @@ class RideState:
         self.power_w = 0.0
         self._prev_v: float | None = None
         self.phys = RoadPhysics()
+        self.traffic: Traffic | None = None   # other riders, created when the ride starts
         self.v_virtual = 0.0        # m/s on the virtual road
         self.virtual_dist = 0.0     # m on the virtual road
         self.vgear = START_GEAR     # virtual gearing index (0 = gear 1, easiest)
@@ -80,6 +82,7 @@ class RideState:
         if self.status != "idle":
             raise RuntimeError(f"Cannot start from status {self.status}")
         self.status = "running"
+        self.traffic = Traffic(self.workout.total_s)   # the other riders for this ride
 
     def pause(self) -> None:
         if self.status != "running":
@@ -140,6 +143,10 @@ class RideState:
         self.distance_m += v * dt
         self.altitude_m += v * dt * self.gradient_at(self.elapsed) / 100.0
         self.elapsed += dt
+        if self.traffic is not None:
+            seg = self.phase()
+            self.traffic.update(dt, self.elapsed, self.virtual_dist, self.v_virtual, self.power_w,
+                                seg.kind if seg else None, self.gradient_at(self.elapsed))
         if self.elapsed >= self.workout.total_s:
             self.elapsed = float(self.workout.total_s)
             self.status = "finished"
@@ -189,6 +196,8 @@ class RideState:
             "distance_m": round(self.distance_m, 1),
             "altitude_m": round(self.altitude_m, 1),
             "gradient_pct": self.gradient_at(self.elapsed),
+            "bots": self.traffic.snapshot(self.virtual_dist)["riders"] if self.traffic else [],
+            "bot_counts": dict(self.traffic.counts) if self.traffic else {"met": 0, "passed": 0, "passed_by": 0},
         }
 
     def row(self, now: float) -> dict:
@@ -220,7 +229,7 @@ class RideEngine:
                  tick_hz: float = 5.0):
         self.session = session
         self.roles = roles or SensorRoles()
-        self.speed_multiplier = 1.0  # testing only: scales the speed the ride uses (e.g. x10 to catch the ghost)
+        self.speed_multiplier = 1.0  # testing only: scales the speed the ride uses (e.g. x5 to meet the other riders quickly)
         self.recordings_dir = Path(recordings_dir)
         self.state: RideState | None = None
         self.recorder: Recorder | None = None
@@ -232,6 +241,7 @@ class RideEngine:
         self._last_sec = -1
         self._finalized = False
         self._finished_at: float | None = None   # when a finished ride was first seen (preview returns after a pause)
+        self._cadence_devices: set[int] = set()  # device numbers of combined sensors that have sent cadence
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="ride-engine")
         self._thread.start()
@@ -309,6 +319,7 @@ class RideEngine:
                 "duration_s": round(st.elapsed, 1),
                 "distance_m": round(st.distance_m, 1),
                 "altitude_gain_m": round(st.altitude_m, 1),
+                "other_riders": dict(st.traffic.counts) if st.traffic else None,
             },
         }
         self.recorder.close(doc)
@@ -322,7 +333,8 @@ class RideEngine:
         if not wanted:
             return False
         for d in self.session.devices.values():
-            if d["devtype"] != 121:
+            # only a combined sensor that has sent cadence counts: a speed-only one never does
+            if d["devtype"] != 121 or d["devnum"] not in self._cadence_devices:
                 continue
             for sel in wanted:
                 if sel["devnum"] in (0, d["devnum"]) and now - d.get("last", 0.0) <= LIVE_S:
@@ -340,6 +352,8 @@ class RideEngine:
             with self._lock:
                 while item is not None:
                     if item.get("type") == "sample":
+                        if item.get("metric") == "cadence" and item.get("devtype") == 121:
+                            self._cadence_devices.add(item.get("devnum"))
                         if self.state and item.get("metric") in METRICS and self.roles.accepts(item):
                             value = item["value"] * (self.speed_multiplier if item["metric"] == "speed" else 1.0)
                             self.state.update(item["metric"], item["ts"], value)

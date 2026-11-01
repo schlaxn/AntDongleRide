@@ -47,7 +47,6 @@ function workoutBody() {
     cooldown_s: +$("wCool").value,
     between_s: +$("wBetween").value,
     skip_last_recover: $("wSkip").checked,
-    ghost: Object.fromEntries(GHOST_KINDS.map((k) => [k, { speed_kmh: +$(`gh_${k}_v`).value }])),
     gradients: {
       warmup: +$("gWarm").value, work: +$("gWork").value, recover: +$("gRec").value,
       between: +$("gBetween").value, cooldown: +$("gCool").value,
@@ -126,12 +125,6 @@ $("btnLoad").onclick = loadWorkout;
 $("wPreset").onchange = () => {
   const p = PRESETS[$("wPreset").value];
   if (p) setWorkoutFields(p);
-  if (p) {
-    // choosing a preset also shows the ghost rider
-    $("ghostOn").checked = true;
-    applyGhostVisibility();
-    world?.setGhost(true);
-  }
 };
 // Start checks the required sensors first and opens the sensor dialog if one is missing.
 async function startRide(skipCheck) {
@@ -142,12 +135,6 @@ async function startRide(skipCheck) {
   }
   if (status !== "running" && status !== "paused") {
     if (!(await loadWorkout())) return;
-  }
-  if (status !== "paused") {
-    // a new ride always shows the ghost rider in the left lane
-    $("ghostOn").checked = true;
-    applyGhostVisibility();
-    world?.setGhost(true);
   }
   if (status !== "paused") {
     // 10-0 countdown before a new ride starts; Cancel aborts it
@@ -201,41 +188,14 @@ $("btnStart").onclick = () => startRide(false);
 $("btnSensors").onclick = () => openSensorDialog(() => startRide(true));
 $("btnView").onclick = () => world?.resetView();
 
-// ghost rider: per interval, speed (km/h) and power (W) are linked by the trainer power curve
-const GHOST_KINDS = ["warmup", "work", "recover", "between", "cooldown"];
-const PM_EXP = Math.log(540 / 145) / Math.log(40 / 20);   // same curve as the server (145 W @ 20, 540 W @ 40)
-const powerFor = (v) => 145 * Math.pow(v / 20, PM_EXP);
-const speedFor = (p) => 20 * Math.pow(p / 145, 1 / PM_EXP);
-for (const k of GHOST_KINDS) {
-  $(`gh_${k}_v`).onchange = () => { $(`gh_${k}_p`).value = Math.round(powerFor(+$(`gh_${k}_v`).value)); };
-  $(`gh_${k}_p`).onchange = () => { $(`gh_${k}_v`).value = speedFor(+$(`gh_${k}_p`).value).toFixed(1); };
+// other riders: "show other riders" is on by default and remembered in this browser
+const botsBox = $("botsOn");
+try { if (localStorage.getItem("botsOn") === "0") botsBox.checked = false; } catch (_) { /* no storage */ }
+function applyBots() {
+  world?.setBots(botsBox.checked);
+  try { localStorage.setItem("botsOn", botsBox.checked ? "1" : "0"); } catch (_) { /* no storage */ }
 }
-// the ghost parameters only show while the ghost is on
-function applyGhostVisibility() {
-  const on = $("ghostOn").checked;
-  $("ivtable").classList.toggle("ghost-on", on);
-  $("ghnote").hidden = !on;
-}
-$("ghostOn").onchange = () => { world?.setGhost($("ghostOn").checked); applyGhostVisibility(); };
-$("ghostMode").onchange = () => world?.setGhostMode($("ghostMode").value);
-applyGhostVisibility();
-// one column at a time: km/h or W, switched by the button; both values stay in sync
-let ghostMode = "speed";
-function applyGhostMode() {
-  for (const k of GHOST_KINDS) {
-    $(`gh_${k}_v`).hidden = ghostMode !== "speed";
-    $(`gh_${k}_p`).hidden = ghostMode !== "power";
-  }
-  $("btnGhostMode").textContent = ghostMode === "speed" ? "Show W" : "Show km/h";
-}
-$("btnGhostMode").onclick = () => { ghostMode = ghostMode === "speed" ? "power" : "speed"; applyGhostMode(); };
-applyGhostMode();
-function setGhostFields(ghost) {
-  for (const k of GHOST_KINDS) {
-    $(`gh_${k}_v`).value = ghost[k].speed_kmh;
-    $(`gh_${k}_p`).value = Math.round(ghost[k].power_w);
-  }
-}
+botsBox.onchange = applyBots;
 
 // testing: switch the speed used by the ride between x1 and x10
 let speedFactor = 1;
@@ -318,8 +278,7 @@ async function init() {
   setTimeline(w);
   world?.setWorkout(w);
   setWorkoutFields(w);
-  if (w.ghost) setGhostFields(w.ghost);   // absent if the server is older than the ghost feature
-  world?.setGhost($("ghostOn").checked);
+  applyBots();
   $("loadInfo").textContent = w.loaded ? `${w.shorthand} · ${fmtClock(w.total_s)}` : "";
   onSnapshot(await (await fetch("/api/ride/state")).json());
   if (world) $("viewMsg").hidden = true;

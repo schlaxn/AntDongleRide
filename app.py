@@ -16,14 +16,14 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 import ble as ble_mod
-from ble import BleHeartRate
+from ble import BleCsc, BleHeartRate
 from ant.profiles import DEVICE_TYPES
 from ant.session import AntSession
 from ant.usbdev import AntUsbError
 from ride import RideEngine
 from sensors import SensorRoles, role_status
 from sim import SimulatedRider
-from workout import DEFAULT_GHOST, DEFAULT_GRADIENTS, GHOST_KINDS, Workout, parse_shorthand
+from workout import DEFAULT_GRADIENTS, Workout, parse_shorthand
 
 ROOT = Path(__file__).resolve().parent
 RECORDINGS = ROOT / "recordings"
@@ -124,6 +124,9 @@ def send_raw():
 
 
 ble = BleHeartRate(on_bpm=session.ingest_ble_bpm, on_event=session.ble_event)
+# Bluetooth speed and cadence sensor: its samples are "combined" (type 121) with device number -2
+ble_csc = BleCsc(on_sample=lambda ts, metric, value, unit: session.ingest_sample(ts, 121, -2, metric, value, unit),
+                 on_event=session.ble_event, wheel_m=lambda: session.decoder.wheel_m)
 
 
 @app.post("/api/ble/scan")
@@ -151,6 +154,22 @@ def ble_stop():
     return jsonify({"ok": True})
 
 
+@app.post("/api/ble/csc/start")
+def ble_csc_start():
+    body = request.get_json(silent=True) or {}
+    address = body.get("address")
+    if not address:
+        return _json_error("No device address")
+    ble_csc.start(address)
+    return jsonify({"ok": True, "state": ble_csc.state})
+
+
+@app.post("/api/ble/csc/stop")
+def ble_csc_stop():
+    ble_csc.stop()
+    return jsonify({"ok": True})
+
+
 @app.get("/api/ble/state")
 def ble_state():
     return jsonify({"running": ble.running, "address": ble.address, "state": ble.state})
@@ -175,18 +194,6 @@ def _workout_from_body(body: dict) -> Workout:
         overrides["skip_last_recover"] = bool(body["skip_last_recover"])
     if "gradients" in body:
         overrides["gradients"] = {**DEFAULT_GRADIENTS, **{k: float(v) for k, v in body["gradients"].items()}}
-    if "ghost" in body:
-        ghost = {k: dict(v) for k, v in DEFAULT_GHOST.items()}
-        for kind, spec in dict(body["ghost"]).items():
-            if kind not in GHOST_KINDS:
-                raise ValueError(f"Unknown interval type for ghost: {kind}")
-            for key in ("speed_kmh", "power_w"):
-                if spec.get(key) not in (None, ""):
-                    value = float(spec[key])
-                    if value < 0:
-                        raise ValueError("Ghost speed and power cannot be negative")
-                    ghost[kind] = {key: value}
-        overrides["ghost"] = ghost
     if "shorthand" in body:
         return parse_shorthand(str(body["shorthand"]), **overrides)
     fields = {k: int(body[k]) for k in ("blocks", "reps", "on_s", "off_s") if k in body}
@@ -306,6 +313,8 @@ def sensors_state():
         name = DEVICE_TYPES.get(d["devtype"], (f"type {d['devtype']}",))[0]
         if d["devnum"] == -1:
             name = "Bluetooth watch"
+        elif d["devnum"] == -2:
+            name = "Bluetooth speed & cadence"
         devices.append({**d, "name": name, "age_s": round(now - d.get("last", now), 1)})
     devices.sort(key=lambda d: (d["devtype"], d["devnum"]))
     return jsonify({
@@ -315,6 +324,8 @@ def sensors_state():
         "channels": {str(ch): {"devtype": dt, "devnum": session.channel_devnum.get(ch, 0)}
                      for ch, dt in session.channels.items()},
         "ble": {"running": ble.running, "address": ble.address, "state": ble.state},
+        "ble_csc": {"running": ble_csc.running, "address": ble_csc.address, "state": ble_csc.state,
+                    "has_crank": ble_csc.has_crank},
     })
 
 

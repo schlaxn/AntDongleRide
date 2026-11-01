@@ -84,33 +84,5 @@ class ShorthandTests(unittest.TestCase):
         self.assertEqual(len(d["gradient_per_second"]), d["total_s"])
 
 
-class GhostTests(unittest.TestCase):
-    def test_default_ghost_speeds_and_derived_power(self):
-        g = parse_shorthand("3-13-30-15").ghost_resolved()
-        self.assertEqual(g["work"]["speed_kmh"], 27.0)
-        self.assertEqual(g["recover"]["speed_kmh"], 18.0)
-        # power derived from the trainer curve: 145 W @ 20 km/h, 540 W @ 40 km/h
-        self.assertAlmostEqual(g["work"]["power_w"], 256.3, delta=1.0)
-        self.assertAlmostEqual(g["recover"]["power_w"], 118.7, delta=1.0)
-
-    def test_power_given_derives_speed(self):
-        w = parse_shorthand("1-1-30-15", ghost={"work": {"power_w": 145.0}})
-        g = w.ghost_resolved()
-        self.assertAlmostEqual(g["work"]["speed_kmh"], 20.0, places=1)
-        self.assertEqual(g["work"]["power_w"], 145.0)
-
-    def test_distance_matches_speed_over_time(self):
-        w = parse_shorthand("1-1-30-15", warmup_s=0, cooldown_s=0, ghost={"work": {"speed_kmh": 36.0}})
-        dist = w.ghost_distance_m()
-        self.assertEqual(len(dist), w.total_s + 1)
-        # 36 km/h = 10 m/s: about 10 m per second in the middle of the work interval
-        self.assertAlmostEqual(dist[15] - dist[14], 10.0, delta=0.5)
-
-    def test_to_dict_contains_ghost_profile(self):
-        d = parse_shorthand("1-1-30-15").to_dict()
-        self.assertEqual(len(d["ghost_distance_m"]), d["total_s"] + 1)
-        self.assertIn("work", d["ghost"])
-
-
 if __name__ == "__main__":
     unittest.main()

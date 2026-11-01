@@ -204,7 +204,7 @@ function pedalPos(side, phi) {
   return new V(side * 0.09, BB.y + CRANK * Math.cos(a), BB.z - CRANK * Math.sin(a));
 }
 
-// Builds one bike with its rider. `m` holds the materials; the ghost passes translucent ones.
+// Builds one bike with its rider. `m` holds the materials (opaque for the rider and the other riders).
 // Returns the group (position it in the world), pose(crankAngle, pedalling) and setWheels(angle).
 function buildRig(m, castShadow) {
   const bike = new THREE.Group();
@@ -449,10 +449,6 @@ export function createWorld(container, onFps = () => {}) {
     windmillCap: new THREE.MeshLambertMaterial({ color: 0x5b3a29 }),
     sailCloth: new THREE.MeshLambertMaterial({ color: 0xf4f1e8 }),
   };
-  // ghost: one translucent blue-grey material for every part
-  const ghostMat = new THREE.MeshLambertMaterial({ color: 0x6f88a3, transparent: true, opacity: 0.38, depthWrite: false });
-  const ghostMats = {};
-  for (const k of Object.keys(mat)) ghostMats[k] = ghostMat;
 
   // ---------- road ground: vertex colours, flat shaded ----------
   const nV = ROWS * COLS;
@@ -728,75 +724,58 @@ export function createWorld(container, onFps = () => {}) {
     }
   }
 
-  // ---------- rider and ghost ----------
+  // ---------- rider and other riders ----------
   const rider = buildRig(mat, true);
   const bike = rider.group;
   bike.position.set(LANE_X, WHEEL_R, 0);
   scene.add(bike);
-  // ghost stream: ghosts spawn at random, just out of sight, ahead or behind, in the left lane.
-  // parameterized: each ghost follows its level's virtual profile (interval power -10..+10%).
-  // adaptive: each ghost keeps a share of YOUR average (speed, or power converted to speed).
-  // Colours: above 0 = yellow jersey, below 0 = green jersey, 0 = the usual ghost colour.
-  const ghostJersey = (c) => new THREE.MeshLambertMaterial({ color: c, transparent: true, opacity: 0.5, depthWrite: false });
-  // jersey colour per level (percent of interval power): +10 yellow, +5 pink, 0 red, -5 white, -10 green
-  const LEVEL_JERSEY = { "10": 0xf2c200, "5": 0xff69b4, "0": 0xd62828, "-5": 0xf2f2f2, "-10": 0x2ea043 };
-  const ghostRigs = {};
-  for (const key of Object.keys(LEVEL_JERSEY)) {
-    const ms = { ...ghostMats, jersey: ghostJersey(LEVEL_JERSEY[key]) };
-    ghostRigs[key] = [];
-    for (let i = 0; i < 4; i++) {
-      const rig = buildRig(ms, false);
-      rig.group.visible = false;
-      scene.add(rig.group);
-      ghostRigs[key].push({ rig, busy: false });
-    }
+  // other riders: the server (bots.py) decides who is on the road and where. Each one is drawn on
+  // a pooled rig with an opaque jersey and a name tag. A rig belongs to a rider while it is listed.
+  const BOT_RIGS = 12;
+  const botRigs = [];
+  for (let i = 0; i < BOT_RIGS; i++) {
+    const jersey = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const rig = buildRig({ ...mat, jersey }, false);
+    rig.group.visible = false;
+    const tagCanvas = document.createElement("canvas");
+    tagCanvas.width = 256; tagCanvas.height = 64;
+    const tex = new THREE.CanvasTexture(tagCanvas);
+    const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    tag.scale.set(2.2, 0.56, 1);   // twice the previous size, still no background box
+    tag.position.set(0, 1.45, 0);
+    rig.group.add(tag);
+    scene.add(rig.group);
+    botRigs.push({ rig, jersey, tag, tagCanvas, tex, id: null, wheel: 0, crank: 0 });
   }
-  const ghostInstances = [];
-  let spawnIn = 3;                  // seconds until the next ghost
-  const GHOST_RATIO = 2.6;          // gear used for the ghosts' legs
-  const ADAPTIVE_LIFE_S = 240;      // an adaptive ghost leaves after 4 minutes of riding
-  const POWER_EXP = 1.9;            // trainer power curve exponent (power ~ speed^1.9)
-  const speedHist = [];             // {t, v}: your virtual speed (m/s) over the last 60 s
-  function averageVirtualSpeed(nowS) {
-    const recent = speedHist.filter((p) => p.t >= nowS - 60);
-    if (!recent.length) return 0;
-    return recent.reduce((a, p) => a + p.v, 0) / recent.length;
+  let botsOn = true;               // "show other riders" checkbox
+  // name tag: plain text with a thin dark outline, no background box
+  function drawTag(entry, name) {
+    const c = entry.tagCanvas.getContext("2d");
+    c.clearRect(0, 0, 256, 64);
+    c.font = "600 22px system-ui, sans-serif";
+    c.textAlign = "center"; c.textBaseline = "middle";
+    c.lineJoin = "round";
+    c.lineWidth = 5;
+    c.strokeStyle = "rgba(10,12,16,0.85)";
+    c.strokeText(name, 128, 32);
+    c.fillStyle = "#ffffff";
+    c.fillText(name, 128, 32);
+    entry.tex.needsUpdate = true;
   }
-  function clearGhosts() {
-    for (const gi of ghostInstances) { gi.entry.busy = false; gi.entry.rig.group.visible = false; }
-    ghostInstances.length = 0;
+  // "you passed X" / "X passes you" toasts, from the sign of the gap between snapshots
+  const toastEl = document.createElement("div");
+  toastEl.style.cssText = "position:fixed;top:14px;left:50%;transform:translateX(-50%);background:rgba(20,23,28,.82);" +
+    "color:#fff;padding:8px 14px;border-radius:8px;font:600 15px system-ui,sans-serif;pointer-events:none;" +
+    "opacity:0;transition:opacity .3s;z-index:20";
+  document.body.appendChild(toastEl);
+  let toastTimer = null;
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.style.opacity = "1";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.style.opacity = "0"; }, 2600);
   }
-  // lateral slots 0.5 m apart. None sits on the centre marker (x = 0) or next to the rider (x = 2.5).
-  // Left lane: -2.25 .. -0.75; right lane, up to the rider: 0.75 and 1.25.
-  const GHOST_SLOTS = [-2.25, -1.75, -1.25, -0.75, 0.75, 1.25];
-  // a slot is free if no live ghost in it is within 2.5 m (along the road) of the spawn point.
-  // Fast ghosts (positive levels) prefer the free slot nearest the centre, slow ones the outermost left slot.
-  function pickLane(lvl, spawnDelta) {
-    const clear = (x) => ghostInstances.every((g) => g.x !== x || Math.abs(g.delta - spawnDelta) > 2.5);
-    const free = GHOST_SLOTS.filter(clear);
-    if (!free.length) return GHOST_SLOTS[Math.floor(Math.random() * GHOST_SLOTS.length)];
-    if (lvl > 0) return free.reduce((a, b) => (Math.abs(b) < Math.abs(a) ? b : a));
-    if (lvl < 0) return free.reduce((a, b) => (Math.abs(b) > Math.abs(a) ? b : a));
-    return free[Math.floor(Math.random() * free.length)];
-  }
-  function spawnGhost(tNow, dNow) {
-    const keys = ghostMode === "param"
-      ? (ghostLevels ? Object.keys(ghostLevels) : [])
-      : ["-10", "-5", "0", "5", "10"];
-    if (!keys.length) return;
-    const lvl = parseInt(keys[Math.floor(Math.random() * keys.length)], 10);
-    const entry = ghostRigs[String(lvl)].find((e) => !e.busy);
-    if (!entry) return;
-    entry.busy = true;
-    const ahead = Math.random() < 0.5;
-    const spawnDelta = ahead ? D_AHEAD + 20 : -(D_BACK + 15);       // just out of sight
-    ghostInstances.push({
-      key: String(lvl), lvl, entry, mode: ghostMode,
-      x: pickLane(lvl, spawnDelta), delta: spawnDelta,
-      spawnAbs: dNow + spawnDelta,
-      tSpawn: tNow, travel: 0, life: 0, wheel: 0, crank: 0,
-    });
-  }
+  const lastSide = new Map();      // rider id -> +1 ahead of you, -1 behind you
 
   // ---------- camera and state ----------
   const camTarget = new V(LANE_X, 1, -12);
@@ -804,29 +783,10 @@ export function createWorld(container, onFps = () => {}) {
   camera.lookAt(camTarget);
 
   let profile = null;              // gradient_per_second, percent per second
-  let ghostOn = false;             // ghost rider option (off by default)
-  let ghostDistance = null;        // cumulative ghost distance (m) per second, from the workout
-  let ghostSpeedKmh = null;        // ghost speed (km/h) per second, from the workout
-  let ghostCadenceRpm = null;      // ghost virtual cadence (rpm) per second, from the workout
-  let ghostLevels = null;          // per-level ghost profiles (-10..+10% of interval power), from the workout
-  let ghostMode = "param";         // "param" | "speed" | "power"
 
-  // linear interpolation in a per-second array; before the start the first value, after the end the last
-  function interpArr(arr, t) {
-    if (t <= 0) return arr[0];
-    if (t >= arr.length - 1) return arr[arr.length - 1];
-    const i = Math.floor(t), f = t - i;
-    return arr[i] + (arr[i + 1] - arr[i]) * f;
-  }
-  // the ghost stops when the workout ends
-  function interpSpeed(arr, t) {
-    if (t >= arr.length - 1) return 0;
-    return interpArr(arr, t);
-  }
   let snap = null, snapAt = 0;     // latest server snapshot and when it arrived (s)
   let vSmooth = 0;                 // m/s, EMA of speed
   let wheelAngle = 0, crankAngle = 0;
-  let ghostWheel = 0, ghostCrank = 0;
   let w = 0, h = 0;
   let frames = 0, fpsT0 = performance.now() / 1000;
   let lastFrame = performance.now() / 1000;
@@ -856,7 +816,7 @@ export function createWorld(container, onFps = () => {}) {
     return h0 + (h1 - h0) * f;
   }
 
-  // Rider and ghost time base. The page advances time every frame and eases towards the server's
+  // Rider time base. The page advances time every frame and eases towards the server's
   // estimate, so a snapshot arriving late or early does not make the riders jump.
   let disp = null, dispAt = 0;
   function timeNow(nowS) {
@@ -1121,55 +1081,37 @@ export function createWorld(container, onFps = () => {}) {
     bike.rotation.z = cadence > 0 ? -ROCK_RAD * Math.sin(crankAngle) : 0;   // sign flipped: the roll ran the wrong way
     rider.pose(crankAngle, cadence > 0);
 
-    // ghost stream: spawn at random, then move and draw every ghost
-    const ghostRunning = ghostOn && !!snap && snap.status === "running";
-    if (!ghostOn) clearGhosts();
-    if (ghostRunning && (ghostMode !== "param" || ghostLevels)) {
-      spawnIn -= dt;
-      if (spawnIn <= 0) { spawnGhost(tNow, dNow); spawnIn = 4 + Math.random() * 6; }
-    }
-    const avgV = averageVirtualSpeed(nowS);                           // m/s, your average over the last minute
-    for (let i = ghostInstances.length - 1; i >= 0; i--) {
-      const gi = ghostInstances[i];
-      let speed = 0, cad = 0, delta = 0, end = false;
-      if (gi.mode === "param") {
-        const L = ghostLevels && ghostLevels[gi.key];
-        if (!L || tNow > L.distance_m.length - 1) {
-          end = true;                                                 // the workout has ended for this ghost
-        } else {
-          const dist = gi.spawnAbs + interpArr(L.distance_m, tNow) - interpArr(L.distance_m, gi.tSpawn);
-          delta = dist - dNow;
-          speed = interpSpeed(L.speed_kmh, tNow) / 3.6;
-          cad = interpSpeed(L.cadence_rpm, tNow);
+    // other riders: the server lists who is on the road, and where, at each snapshot. Between
+    // snapshots each one moves on at its own speed. Riders that are no longer listed release their rig.
+    const listed = new Set();
+    if (botsOn && snap && snap.bots) {
+      const extra = Math.max(0, nowS - snapAt);
+      for (const b of snap.bots) {
+        let entry = botRigs.find((e) => e.id === b.id) || botRigs.find((e) => e.id === null);
+        if (!entry) continue;
+        if (entry.id !== b.id) {
+          entry.id = b.id;
+          entry.jersey.color.setHex(b.jersey);
+          drawTag(entry, b.name);
         }
-      } else {
-        // adaptive: a share of your average speed, or of your power converted through the power curve
-        const factor = gi.mode === "speed" ? 1 + gi.lvl / 100 : Math.pow(1 + gi.lvl / 100, 1 / POWER_EXP);
-        speed = factor * avgV;
-        if (ghostRunning) { gi.travel += speed * dt; gi.life += dt; }
-        delta = gi.spawnAbs + gi.travel - dNow;
-        cad = (speed * 60) / (GHOST_RATIO * WHEEL_CIRC);
-        if (gi.life > ADAPTIVE_LIFE_S) end = true;
+        listed.add(b.id);
+        const v = b.speed_kmh / 3.6;
+        const delta = b.distance_m + v * extra - dNow;
+        entry.wheel -= (v * dt) / WHEEL_R;
+        entry.crank += (b.cadence_rpm / 60) * Math.PI * 2 * dt;
+        entry.rig.setWheels(entry.wheel);
+        entry.rig.pose(entry.crank, v > 0);
+        const show = delta >= -D_BACK && delta <= D_AHEAD;
+        entry.rig.group.visible = show;
+        if (!show) continue;
+        entry.tag.visible = Math.abs(delta) < 120;
+        entry.rig.group.position.set(b.lane_x, meshHeightAt(b.lane_x, delta, dNow) + WHEEL_R, -delta);
+        const slope = (meshHeightAt(b.lane_x, delta + 1, dNow) - meshHeightAt(b.lane_x, delta - 1, dNow)) / 2;
+        entry.rig.group.rotation.x = Math.atan(slope);
       }
-      gi.delta = delta;
-      if (!end && (delta < -(D_BACK + 150) || delta > D_AHEAD + 200)) end = true;   // far out of reach
-      if (end || !ghostOn) {
-        gi.entry.busy = false;
-        gi.entry.rig.group.visible = false;
-        ghostInstances.splice(i, 1);
-        continue;
-      }
-      const rig = gi.entry.rig;
-      gi.wheel -= (speed * dt) / WHEEL_R;
-      gi.crank += (cad / 60) * Math.PI * 2 * dt;
-      rig.setWheels(gi.wheel);
-      rig.pose(gi.crank, speed > 0);
-      const show = delta >= -D_BACK && delta <= D_AHEAD;
-      rig.group.visible = show;
-      if (!show) continue;
-      rig.group.position.set(gi.x, meshHeightAt(gi.x, delta, dNow) + WHEEL_R, -delta);
-      const slope = (meshHeightAt(gi.x, delta + 1, dNow) - meshHeightAt(gi.x, delta - 1, dNow)) / 2;
-      rig.group.rotation.x = Math.atan(slope);
+    }
+    for (const e of botRigs) {
+      if (e.id !== null && !listed.has(e.id)) { e.id = null; e.rig.group.visible = false; }
     }
 
     // sun and shadows follow the riders
@@ -1209,24 +1151,27 @@ export function createWorld(container, onFps = () => {}) {
 
   return {
     resetView,
-    setGhost(on) { ghostOn = !!on; if (!ghostOn) clearGhosts(); },
-    setGhostMode(m) { ghostMode = m; clearGhosts(); spawnIn = 2; },
+    setBots(on) { botsOn = !!on; },
     setWorkout(workout) {
       profile = workout ? workout.gradient_per_second : null;
-      // the ghost animates on its virtual road distance and speed
-      ghostDistance = workout && workout.ghost_virtual_distance_m ? workout.ghost_virtual_distance_m : null;
-      ghostSpeedKmh = workout && workout.ghost_virtual_speed_kmh ? workout.ghost_virtual_speed_kmh : null;
-      ghostCadenceRpm = workout && workout.ghost_virtual_cadence_rpm ? workout.ghost_virtual_cadence_rpm : null;
-      ghostLevels = workout && workout.ghost_levels ? workout.ghost_levels : null;
-      clearGhosts();
     },
     setSnapshot(s) {
       snap = s;
       snapAt = performance.now() / 1000;
-      // keep the last minute of your virtual speed for the adaptive ghosts
-      speedHist.push({ t: snapAt, v: (s.virtual_speed_kmh || 0) / 3.6 });
-      while (speedHist.length && speedHist[0].t < snapAt - 60) speedHist.shift();
-      if (s.status === "idle") clearGhosts();   // a new ride starts with no ghosts on the road
+      if (s.status === "idle") {                       // a new ride starts with no riders on the road
+        for (const e of botRigs) { e.id = null; e.rig.group.visible = false; }
+        lastSide.clear();
+      } else if (s.status === "running" && s.bots) {   // overtake toasts, only while riding
+        const me = s.virtual_distance_m || 0;
+        for (const b of s.bots) {
+          const gap = b.distance_m - me;
+          const prev = lastSide.get(b.id) || 0;
+          const now = gap > 2 ? 1 : gap < -2 ? -1 : prev;   // 2 m hysteresis
+          if (prev === 1 && now === -1) toast(`You passed ${b.name}`);
+          else if (prev === -1 && now === 1) toast(`${b.name} passes you`);
+          lastSide.set(b.id, now);
+        }
+      }
       if (s.status === "paused") snap = { ...s, speed_kmh: 0, cadence_rpm: 0 };
     },
     dispose() { renderer.dispose(); },

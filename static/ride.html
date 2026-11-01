@@ -59,12 +59,8 @@
   #view { height: 100%; min-height: 0; }
   aside { min-height: 0; overflow-y: auto; padding-right: 4px; }
   #timelineWrap { grid-row: 2; }
-  .ivtable { display: grid; grid-template-columns: 110px 1fr 1fr; gap: 6px 8px; align-items: center; margin-top: 8px; }
+  .ivtable { display: grid; grid-template-columns: 110px 1fr; gap: 6px 8px; align-items: center; margin-top: 8px; }
   .ivhead { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
-  .ghcell { display: flex; gap: 6px; }
-  .ivtable:not(.ghost-on) { grid-template-columns: 110px 1fr; }
-  .ivtable:not(.ghost-on) .ghcell { display: none; }
-  .ghcell input { width: 100%; min-width: 0; }
   .ivtable input { width: 100%; min-width: 0; background: #0c0e12; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font: inherit; }
   /* riding (ride running or paused): 3D view fills the screen, live HUD and timeline float above it,
      the workout setup panel is hidden. Toggled by main.js via the body class. */
@@ -163,7 +159,7 @@
         <div class="metric"><div class="k">Gradient</div><div class="v" id="mGrad">-<span class="u">%</span></div></div>
         <div class="metric riding-hide"><div class="k">Gear ratio</div><div class="v" id="mGear">-<span class="u" id="mDev"></span></div></div>
         <div class="metric riding-hide"><div class="k">Speed (sensor)</div><div class="v" id="mSpd">-<span class="u">km/h</span></div></div>
-        <div class="metric riding-hide"><div class="k">Speed multiplier (test)</div><div class="v"><button id="btnSpeedX" style="font-size:15px;padding:6px 12px" title="Testing: multiplies the speed the ride uses (x10 to catch the ghost)">Speed ×1</button></div></div>
+        <div class="metric riding-hide"><div class="k">Speed multiplier (test)</div><div class="v"><button id="btnSpeedX" style="font-size:15px;padding:6px 12px" title="Testing: multiplies the speed the ride uses (x5 to pass the other riders quickly)">Speed ×1</button></div></div>
       </div>
       <div class="row" style="margin-top:10px">
         <span class="muted" id="blockInfo">-</span>
@@ -194,41 +190,27 @@
       <div class="row"><label>Skip last rec.</label><input id="wSkip" type="checkbox" checked></div>
       <div class="row"><label class="muted" style="min-width:0"><input id="audioOn" type="checkbox" checked> audio cues</label></div>
       <div class="row">
-        <label class="muted" style="min-width:0"><input id="ghostOn" type="checkbox"> show ghost rider in the left lane</label>
-      </div>
-      <div class="row"><label>Ghost mode</label>
-        <select id="ghostMode">
-          <option value="param">parameterized (interval power)</option>
-          <option value="speed">adaptive to my speed</option>
-          <option value="power">adaptive to my power</option>
-        </select>
+        <label class="muted" style="min-width:0"><input id="botsOn" type="checkbox" checked> show other riders</label>
       </div>
       <div class="ivtable" id="ivtable">
         <div class="ivhead">Interval</div>
         <div class="ivhead">Duration (s)</div>
-        <div class="ghcell"><button id="btnGhostMode" style="padding:2px 8px">Show W</button></div>
 
         <div>Warm-up</div>
         <div><input id="wWarm" type="number" value="600" min="0"></div>
-        <div class="ghcell"><input id="gh_warmup_v" type="number" step="0.5" min="0" placeholder="km/h"><input id="gh_warmup_p" type="number" step="1" min="0" placeholder="W" hidden></div>
 
         <div>Work</div>
         <div><input id="wOn" type="number" value="30" min="1"></div>
-        <div class="ghcell"><input id="gh_work_v" type="number" step="0.5" min="0" placeholder="km/h"><input id="gh_work_p" type="number" step="1" min="0" placeholder="W" hidden></div>
 
         <div>Recover (short)</div>
         <div><input id="wOff" type="number" value="15" min="0"></div>
-        <div class="ghcell"><input id="gh_recover_v" type="number" step="0.5" min="0" placeholder="km/h"><input id="gh_recover_p" type="number" step="1" min="0" placeholder="W" hidden></div>
 
         <div>Rest (long)</div>
         <div><input id="wBetween" type="number" value="300" min="0"></div>
-        <div class="ghcell"><input id="gh_between_v" type="number" step="0.5" min="0" placeholder="km/h"><input id="gh_between_p" type="number" step="1" min="0" placeholder="W" hidden></div>
 
         <div>Cool-down</div>
         <div><input id="wCool" type="number" value="600" min="0"></div>
-        <div class="ghcell"><input id="gh_cooldown_v" type="number" step="0.5" min="0" placeholder="km/h"><input id="gh_cooldown_p" type="number" step="1" min="0" placeholder="W" hidden></div>
       </div>
-      <div class="muted" id="ghnote" style="font-size:11px;margin-top:6px" hidden>Ghost: enter km/h or W per interval; the other value is calculated from the power curve.</div>
       <details style="margin-top:12px">
         <summary>Gradients (%) and wheel</summary>
         <div class="row"><label>Warm-up</label><input id="gWarm" type="number" step="0.5" value="1"></div>
@@ -249,10 +231,9 @@
 
 <dialog id="sensorDlg">
   <h2>Sensor check</h2>
-  <p class="muted" style="margin-top:0">Switch each sensor on and wait a few seconds. Choose the sensor for each role, or press <b>Search</b> to listen for a new one. <b>*</b> = needed to ride; cadence is optional (without it there is no gear estimate).</p>
+  <p class="muted" style="margin-top:0">Switch each sensor on, press <b>Search</b>, then pick it for its row. ANT and Bluetooth sensors are listed together. <b>*</b> = needed to ride; heart rate and cadence are optional.</p>
   <div id="sensorRows"></div>
   <p id="sensorMsg" class="muted"></p>
-  <p class="muted" style="font-size:12px">Two sensors of the same type: pair the first, switch it off, search, then switch it back on for the second one.</p>
   <div class="row" style="justify-content:flex-end">
     <button id="btnSensorConnect">Connect stick</button>
     <button id="btnSensorClose">Close</button>

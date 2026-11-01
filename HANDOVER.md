@@ -29,7 +29,7 @@ python app.py                 # real sensors, http://127.0.0.1:5000
 python app.py --simulate      # simulated rider (fake HR/speed/cadence)
 python app.py --simulate --no-cadence
 python diag.py                # stage-by-stage stick and sensor check
-python -m unittest discover -s tests    # 91 tests, all passing at last update
+python -m unittest discover -s tests    # 97 tests, all passing at last update
 ```
 
 - **Server changes need a restart** (stop the process listening on port 5000, then start again).
@@ -60,11 +60,15 @@ Server (Python):
   ticks). `RideEngine._combined_live()` says whether a combined sensor feeding speed or cadence is
   transmitting (last packet within 3 s); that makes a quiet cadence read 0, not virtual. Speed
   multiplier (testing) is applied here.
+- `bots.py`: other riders on the road (replaces the ghost riders). `Traffic` holds the schedule
+  (8 encounters per minute, testing rate, `RATE_PER_MIN`), the active riders (`MAX_ACTIVE` = 60) and
+  the counts `met`, `passed`, `passed_by`. About 60 % of encounters start ahead (the rider passes them),
+  40 % behind (they pass the rider). Archetypes (Attacker, Diesel, Climber, Rouleur, Fader, Sprinter)
+  each ride on the rider's own capability per interval kind.
 - `workout.py`: `Workout` dataclass (warm-up, blocks/reps/on/off, between, cool-down,
   skip_last_recover default True: the last rep of every block skips its recovery, and the
-  between-block rest or the cool-down follows), gradient profile, ghost settings per interval type,
-  ghost profiles per level (-10, -5, 0, +5, +10 % of interval power), `to_dict()` for the page.
-  Default `3-13-30-15` = 59:00 with skipping on.
+  between-block rest or the cool-down follows), gradient profile, `to_dict()` for the page.
+  Default `3-13-30-15` = 59:00 with skipping on. The ghost riders were removed.
 - `power.py`: trainer power model (`resistance_w`, `speed_for_power`, `power_w`).
 - `physics.py`: road physics for virtual speed (mass 76 kg, Crr 0.005, CdA 0.32 m² [guess], rho 1.2).
 - `gear.py`: measured gear estimate and cleaning (`clean_rows`), plus virtual gearing: 34/50T front,
@@ -78,11 +82,11 @@ Server (Python):
 
 Page (browser):
 - `static/ride.html`: layout (desktop: fixed window height, control panel scrolls; < 900 px: normal
-  scroll), HUD tiles, workout panel, ghost controls, sensor dialog, timeline.
-- `static/ride/main.js`: page controller (API calls, SSE, start gate, presets, ghost table and mode).
+  scroll), HUD tiles, workout panel, "show other riders" checkbox, sensor dialog, timeline.
+- `static/ride/main.js`: page controller (API calls, SSE, start gate, presets, other-riders checkbox).
 - `static/ride/hud.js`: HUD tiles and timeline drawing.
-- `static/ride/world.js`: Three.js 3D world (road, rider rig, ghosts, scenery, camera, sun).
-  `buildRig(materials, castShadow)` builds one bike + rider; the ghosts use translucent materials.
+- `static/ride/world.js`: Three.js 3D world (road, rider rig, other riders with name tags, scenery, camera, sun).
+  `buildRig(materials, castShadow)` builds one bike + rider; the other riders use opaque pooled rigs.
 - `static/ride/sensors.js`: sensor check dialog. Speed Search covers types 121 and 123; cadence
   Search covers 121. Choosing a combined sensor for speed or cadence also sets the other role to
   the same sensor, when that role is still on type 121 or "Any".
@@ -109,7 +113,11 @@ Other:
 - **Bike roll while pedalling:** `ROCK_RAD` in `static/ride/world.js` (0.0122 rad = 0.7°). The bike
   rolls once per crank turn, with the sign flipped once after it ran the wrong way. Set it to 0 to
   turn it off. Only the rider's bike rolls; the ghosts do not.
-- **Ghost rules:** ghost power is the interval power (default: work 27 km/h, recover 18 km/h,
+- **Other riders (replaces the ghost riders):** server-side in `bots.py`, listed in the snapshot as
+  `bots` and `bot_counts`. The browser draws them on opaque pooled rigs with name tags, and shows
+  "You passed X" / "X passes you" toasts. The "show other riders" checkbox is remembered in the browser.
+  Riders keep their pace during pauses (the ride time freezes). The old ghost rules below no longer apply.
+- **Old ghost rules (removed):** ghost power is the interval power (default: work 27 km/h, recover 18 km/h,
   others 18 km/h, converted to power on the trainer curve). Ghosts spawn at random, just outside
   the view, ahead or behind, in lateral slots 0.5 m apart (x = -2.25 .. -0.75 and 0.75, 1.25; never
   on the centre marker at x = 0). The rider is at x = +2.5 m, 1 m in from the right edge line at +3.5.
@@ -122,17 +130,16 @@ Other:
   trees, fence posts (white, with red reflectors on the right side and white on the left), a white
   centre line and white edge lines on the road.
 - **Workout panel order:** Load workout (top), Preset (applies on change), Blocks, Reps,
-  Skip last rec. (checked by default), table (interval | duration | ghost km/h or W), ghost
+  Skip last rec. (checked by default), table (interval | duration), other-riders checkbox, ghost
   checkbox and mode selector, audio cues, gradients (collapsed at the bottom).
 - **HUD tile order (on screen):** Power | Heart rate; Cadence | Elapsed; Virtual distance |
   Virtual speed; Gradient | Speed (sensor); Gear ratio (full width).
 
 ## 5. Open items (priority order)
 
-1. **Ghost legs and wheels missing** (reported twice, not resolved). Ghosts are built with the same
-   code as the rider, with translucent materials. Likely cause: the translucent blue-grey blends
-   with the road, so dark parts (tyres, shorts) disappear. Need a screenshot or the user's answer
-   about whether this happens only at distance. Do not guess again without a screenshot.
+1. **Other riders: check in the browser.** The bots use opaque materials, which should fix the
+   old ghost legs and wheels problem, but this is unverified. The user's real 54-minute test also
+   shows whether the 60/40 split and the riders' pace feel right.
 2. **History page missing.** The "History" button links to `/history`, which returns 404. The plan
    is a page that lists rides (`/api/rides`), plots HR, cadence and speed over time with phase
    shading, shows the summary, and offers CSV downloads (`/api/rides/<id>/<file>`).
