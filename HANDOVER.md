@@ -9,7 +9,8 @@ A Python (Flask) server plus a browser 3D view that turns a real bike on a train
 ride, with interval workouts, ghost riders, virtual speed/power/gearing, and recordings.
 
 - **Hardware:** ANT USB Stick 2 (VID 0FCF, PID 1008) with the Dynastream libusb-win32 driver
-  (`libusb0.dll` in System32). Garmin speed-only sensor (type 123, device 48791), a heart-rate
+  (`libusb0.dll` in System32). Combined speed & cadence sensor (type 121, device 53894, used for
+  speed and cadence), an older Garmin speed-only sensor (type 123, device 48791), a heart-rate
   broadcast (type 120, device 17691), and the watch over BLE through the laptop's Bluetooth.
 - **Trainer:** Elite Qubo Power Fluid (red roller). Power model fixed by two points: 145 W at
   20 km/h (user measurement) and 540 W at 40 km/h (rating). Exponent ~1.90. Checked against the
@@ -28,7 +29,7 @@ python app.py                 # real sensors, http://127.0.0.1:5000
 python app.py --simulate      # simulated rider (fake HR/speed/cadence)
 python app.py --simulate --no-cadence
 python diag.py                # stage-by-stage stick and sensor check
-python -m unittest discover -s tests    # 82 tests, all passing at handover
+python -m unittest discover -s tests    # 91 tests, all passing at last update
 ```
 
 - **Server changes need a restart** (stop the process listening on port 5000, then start again).
@@ -51,19 +52,26 @@ Server (Python):
   owns the stick, reader thread, channel pairing (`search`, `pair`, `close_search`, MAX 8 channels),
   decoded samples published to subscribers.
 - `sensors.py`: sensor roles (heart rate, speed, cadence) and which device feeds each. Device
-  numbers: 0 = any, -1 = Bluetooth watch.
+  numbers: 0 = any, -1 = Bluetooth watch. Speed accepts types 121 and 123; cadence accepts 121
+  and 122. A combined sensor (121) fills both speed and cadence.
 - `ble.py`: heart rate from the laptop's Bluetooth adapter via bleak.
 - `ride.py`: `RideState` (pure: clock, measured distance, virtual speed and distance via physics,
   virtual gearing, snapshot/row) and `RideEngine` (thread, consumes samples, records, publishes
-  ticks). Speed multiplier (testing) is applied here.
+  ticks). `RideEngine._combined_live()` says whether a combined sensor feeding speed or cadence is
+  transmitting (last packet within 3 s); that makes a quiet cadence read 0, not virtual. Speed
+  multiplier (testing) is applied here.
 - `workout.py`: `Workout` dataclass (warm-up, blocks/reps/on/off, between, cool-down,
-  skip_last_recover default True), gradient profile, ghost settings per interval type, ghost
-  profiles per level (-10, -5, 0, +5, +10 % of interval power), `to_dict()` for the page.
+  skip_last_recover default True: the last rep of every block skips its recovery, and the
+  between-block rest or the cool-down follows), gradient profile, ghost settings per interval type,
+  ghost profiles per level (-10, -5, 0, +5, +10 % of interval power), `to_dict()` for the page.
+  Default `3-13-30-15` = 59:00 with skipping on.
 - `power.py`: trainer power model (`resistance_w`, `speed_for_power`, `power_w`).
 - `physics.py`: road physics for virtual speed (mass 76 kg, Crr 0.005, CdA 0.32 m² [guess], rho 1.2).
 - `gear.py`: measured gear estimate and cleaning (`clean_rows`), plus virtual gearing: 34/50T front,
-  11-34 rear, 13 usable gears (50 ring: 50/27 to 50/17; 34 ring: 34/34 to 34/15), shifts outside
-  85-100 rpm, target 92.5 rpm, stays on the 50 ring whenever possible.
+  10-speed cassette 11-12-13-14-15-17-19-21-24-28 (confirmed by the user), 16 usable gears (34 ring:
+  34/28 to 34/13; 50 ring: 50/21 to 50/11). The shift ladders are `UP_LADDER` and `DOWN_LADDER`,
+  walked one gear at a time. Shifts keep cadence in 85-100 rpm.
+  Cross-chain rule: 50/24 and 50/28 (two largest cogs) and 34/11 and 34/12 (two smallest) are never used.
 - `recorder.py`: writes `recordings/<YYYY-MM-DD_HHMMSS>/` with `ride.csv`, `ride_clean.csv`,
   `samples.csv`, `session.json`.
 - `sim.py`: simulated rider.
@@ -75,8 +83,12 @@ Page (browser):
 - `static/ride/hud.js`: HUD tiles and timeline drawing.
 - `static/ride/world.js`: Three.js 3D world (road, rider rig, ghosts, scenery, camera, sun).
   `buildRig(materials, castShadow)` builds one bike + rider; the ghosts use translucent materials.
-- `static/ride/sensors.js`: sensor check dialog.
+- `static/ride/sensors.js`: sensor check dialog. Speed Search covers types 121 and 123; cadence
+  Search covers 121. Choosing a combined sensor for speed or cadence also sets the other role to
+  the same sensor, when that role is still on type 121 or "Any".
 - `static/ride/audio.js`: beeps.
+- `static/ride/main.js` also keeps the screen awake while riding, or while the speed sensor is
+  live, with the Screen Wake Lock API (`keepAwake`, re-requested when the page becomes visible).
 - `static/vendor/three.module.min.js`: Three.js r170, pinned, local.
 - `static/index.html`: the debug UI (packets, graphs, BLE scan).
 
@@ -90,8 +102,13 @@ Other:
   parameterization, and the speed multiplier test. *Virtual* speed = physics on the road from the
   power the trainer absorbs at the measured speed. The animation and the virtual distance follow
   virtual speed.
-- **Virtual gearing** applies only when there is no real cadence sensor. Cadence = virtual speed
-  divided by gear. The gearbox keeps cadence in 75-110 rpm.
+- **Virtual gearing** applies only when there is no cadence source. A live combined sensor (type
+  121) is a cadence source: when it reports no cadence (crank stopped), cadence is 0, not virtual.
+  Virtual cadence = virtual speed divided by gear. The gearbox keeps cadence in 85-100 rpm
+  (`CAD_LO`, `CAD_HI` in `gear.py`).
+- **Bike roll while pedalling:** `ROCK_RAD` in `static/ride/world.js` (0.0122 rad = 0.7°). The bike
+  rolls once per crank turn, with the sign flipped once after it ran the wrong way. Set it to 0 to
+  turn it off. Only the rider's bike rolls; the ghosts do not.
 - **Ghost rules:** ghost power is the interval power (default: work 27 km/h, recover 18 km/h,
   others 18 km/h, converted to power on the trainer curve). Ghosts spawn at random, just outside
   the view, ahead or behind, in lateral slots 0.5 m apart (x = -2.25 .. -0.75 and 0.75, 1.25; never
@@ -120,12 +137,26 @@ Other:
    is a page that lists rides (`/api/rides`), plots HR, cadence and speed over time with phase
    shading, shows the summary, and offers CSV downloads (`/api/rides/<id>/<file>`).
 3. **Not browser-tested recently:** the 3D view after the last rounds (lower airships, reflectors,
-   adaptive ghosts, jerseys, the ghost-mode selector). Ask the user to check in the browser first.
+   adaptive ghosts, jerseys, the ghost-mode selector, the bike roll, the wake lock). Ask the user to
+   check in the browser first.
 4. **Ghost pace settings** (speed/W per interval in the panel) are still used as the starting point
    for parameterized ghosts. Tell the user before changing this.
-5. **Recordings** are not yet verified end to end with the virtual values after the latest
-   changes (virtual cadence and gear columns were added).
-6. **Possible improvements the user has not asked for yet:** a separate speed multiplier input
+5. **Recording report is not in the repo.** The HTML report generator (zoomable charts, gear
+   distribution, phase power averages) lives in the Claude scratchpad, not in the project. Decide
+   whether to move it into the repo (for example `tools/make_report.py`).
+6. **Stick stops responding after a forced process kill.** After `Stop-Process -Force` on the server,
+   the stick can time out on every USB write (`libusb0-dll:err [_usb_reap_async] timeout error`), and
+   `/api/sensors/search` returns HTTP 500. Fix: unplug and replug the ANT stick, then Connect and
+   Search again. The 500 is a bare error page; a clear message for this case is still open.
+7. **Gear estimate for the report** uses the 34 ring only (no chainring change in the ride) and the
+   nearest 34 gear to the measured ratio, median-filtered, with at most 2 cogs per change. Measured
+   ratio peaks match 34/19, 34/17, 34/15, 34/14 and 34/13 within about 0.5%, so the wheel
+   circumference (2.105 m) and the ring are consistent with the data. The first block was 34/14 for
+   about 6 min; that was only detected after 14 was added to the cassette.
+8. **Slip** was mentioned by the user on 34/15 but not quantified. The 34/15 peak agrees with the
+   nominal ratio within about 0.6%, so the recorded data showed almost no slip. Ask for an amount if
+   it matters.
+9. **Possible improvements the user has not asked for yet:** a separate speed multiplier input
    instead of a toggle; a README; a `config.json` option for mass and CdA.
 
 ## 6. Things that are measured or assumed (confirm, do not invent)
@@ -133,8 +164,11 @@ Other:
 - Rider + bike mass: 76 kg (user).
 - CdA 0.32 m² and Crr 0.005: estimates. Tell the user they are guesses if asked.
 - Front chainrings: two rings, 34T and 50T (the user's choice; replaces the earlier single 40T ring).
-  Rear: 11-34. Only 13 gears are used (see the gear.py comment): 50/30 and 34/14 and smaller are never
-  selected. Shift band 85-100 rpm; cadence can exceed 100 rpm above about 38 km/h on 50/17, by design.
+  Rear: 10-speed 11-12-13-14-15-17-19-21-24-28, confirmed by the user. The 16 gears and the
+  cross-chain exclusions are in the gear.py comment. Shift band 85-100 rpm; cadence can exceed
+  100 rpm above about 38 km/h on 50/17, by design. Real rides used 34 only (no chainring change).
+- Workout `3-13-30-15`: 3 blocks, 13 reps of 30 s on / 15 s off, 5 min between blocks, 10 min
+  warm-up and cool-down. The user's own FTP is estimated at 3.5 W/kg x 66 kg = 231 W (not measured).
 - Chainstay 405 mm and wheelbase 1010 mm: estimates from the user's wheelbase statement.
 - The speed multiplier is currently ×5 at runtime, set through the API. It resets to ×1 on restart.
   The page button toggles ×1 and ×5.
@@ -163,6 +197,10 @@ Other:
 - Before editing, read the current file region (the file changes often).
 - Keep the unit tests green: `python -m unittest discover -s tests`.
 - After server changes, restart the server. After page changes, tell the user to press Ctrl+F5.
+  After a server restart, reconnect the stick (`POST /api/connect`), then start the combined sensor
+  search (`POST /api/sensors/search` with `{"devtype": 121}`).
+- Git: origin is `github.com/schlaxn/AntDongleRide`. The user has asked for direct commits and
+  pushes to `main`, not feature branches.
 - Syntax-check the page scripts with `esprima` (ignore `?.`/`??` false positives).
 - Do not kill processes other than our own server.
 - Do not publish artifacts; this is a local app.

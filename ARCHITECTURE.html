@@ -92,7 +92,7 @@ flowchart LR
   end
   ant["ANT USB Stick 2<br/>VID 0FCF PID 1008<br/>libusb-win32 driver"]
   hrb["Heart-rate strap<br/>ANT device type 120"]
-  spd["Garmin speed sensor<br/>ANT device type 123"]
+  spd["Speed sensors<br/>ANT type 121 (speed + cadence) and 123 (speed)"]
   watch["Watch / HR over BLE"]
   trainer["Elite Qubo Power Fluid<br/>(trainer, power model)"]
   bike["Orbea Orca on trainer"]
@@ -267,7 +267,7 @@ sequenceDiagram
   RE->>RS: measured speed, HR, cadence
   RS->>PH: power absorbed at measured speed
   PH-->>RS: virtual speed, distance, power
-  RS->>RS: gearing (only without cadence sensor)
+  RS->>RS: gearing (only without a cadence source; a live combined sensor counts as one)
   RE->>API: tick (snapshot)
   API-->>UI: SSE event
   UI->>UI: update HUD tiles, move rider and ghosts
@@ -362,7 +362,7 @@ sequenceDiagram
       <h3>Hardware and protocols</h3>
       <ul>
         <li><b>ANT USB Stick 2</b>, ANT 2.4 GHz, up to 8 channels</li>
-        <li><b>ANT+ profiles</b>: heart rate (type 120), speed (type 123)</li>
+        <li><b>ANT+ profiles</b>: heart rate (type 120), speed (type 123), combined speed and cadence (type 121)</li>
         <li><b>Bluetooth LE</b> heart rate via laptop adapter</li>
         <li><b>Elite Qubo Power Fluid</b> trainer (power model fitted to 2 points + manufacturer chart)</li>
         <li><b>Dynastream libusb-win32</b> driver</li>
@@ -372,7 +372,7 @@ sequenceDiagram
       <h3>Models and assumptions</h3>
       <ul>
         <li>Road physics: mass 76 kg, Crr 0.005, CdA 0.32 m² <span class="warn">(guess)</span>, rho 1.2</li>
-        <li>Virtual gearing: 34/50T front, 11-34 rear, 13 usable gears, cadence band 85-100 rpm, target 92.5 rpm</li>
+        <li>Gearing: 34/50T front, 10-speed rear 11-12-13-14-15-17-19-21-24-28 (confirmed), 16 usable gears, no 50/24, 50/28, 34/11, 34/12; virtual gearing keeps cadence in 85-100 rpm</li>
         <li>Wheel circumference 2.105 m (28" x 30 mm)</li>
         <li>Chainstay 405 mm and wheelbase 1010 mm <span class="warn">(estimates)</span></li>
       </ul>
