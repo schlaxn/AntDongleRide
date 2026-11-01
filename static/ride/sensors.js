@@ -3,7 +3,10 @@ const $ = (id) => document.getElementById(id);
 
 const ROLE_LABEL = { heart_rate: "Heart rate", speed: "Speed", cadence: "Cadence" };
 const ROLE_TYPES = { heart_rate: [120], speed: [121, 123], cadence: [121, 122] };
-const ROLE_SEARCH = { heart_rate: 120, speed: 123, cadence: 121 };
+// Search types per role. Speed also listens for a combined speed & cadence sensor (121).
+const ROLE_SEARCH = { heart_rate: [120], speed: [121, 123], cadence: [121] };
+// A combined sensor (121) feeds speed and cadence on one channel; these are the paired roles.
+const COMBINED_PARTNER = { speed: "cadence", cadence: "speed" };
 
 let timer = null;
 let built = false;
@@ -66,13 +69,25 @@ async function refresh() {
 
 async function select(role, value) {
   const [devtype, devnum] = value.split(":").map(Number);
-  try { await post("/api/sensors/select", { role, devtype, devnum }); } catch (e) { alert(e.message); }
+  try {
+    await post("/api/sensors/select", { role, devtype, devnum });
+    // A combined sensor also supplies the partner role. Pair it there too, but only when the
+    // partner role is still on the combined type (or "any"), so a dedicated sensor is not replaced.
+    const partner = COMBINED_PARTNER[role];
+    if (devtype === 121 && partner) {
+      const s = await (await fetch("/api/sensors")).json();
+      const cur = s.roles[partner];
+      if (cur.devtype === 121) {
+        await post("/api/sensors/select", { role: partner, devtype, devnum });
+      }
+    }
+  } catch (e) { alert(e.message); }
   refresh();
 }
 
 async function search(role) {
   try {
-    await post("/api/sensors/search", { devtype: ROLE_SEARCH[role] });
+    for (const devtype of ROLE_SEARCH[role]) await post("/api/sensors/search", { devtype });
     $("sensorMsg").textContent = `Listening for ${ROLE_LABEL[role]} sensors - switch one on now.`;
   } catch (e) { alert(e.message); }
 }

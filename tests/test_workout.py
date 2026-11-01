@@ -8,8 +8,9 @@ class DefaultWorkoutTests(unittest.TestCase):
         self.w = parse_shorthand("3-13-30-15")
 
     def test_total_is_59_minutes_with_last_recovery_skipped(self):
-        # 59:15 with every recovery; the default skips the last recovery (15 s) before the cool-down
-        self.assertEqual(self.w.total_s, 59 * 60)
+        # 59:15 with every recovery (3555 s); the default skips the last recovery (15 s) of each
+        # block, so the between-block rest or the cool-down follows directly: 3 x 15 s less
+        self.assertEqual(self.w.total_s, 59 * 60 + 15 - 3 * 15)
 
     def test_segment_order_starts_with_warmup_ends_with_cooldown(self):
         segs = self.w.segments()
@@ -27,7 +28,7 @@ class DefaultWorkoutTests(unittest.TestCase):
         recover = [s for s in segs if s.kind == "recover"]
         between = [s for s in segs if s.kind == "between"]
         self.assertEqual(len(work), 39)
-        self.assertEqual(len(recover), 38)  # 39 reps, the last recovery of the workout is skipped
+        self.assertEqual(len(recover), 36)  # 39 reps, the last recovery of each block (3) is skipped
         self.assertEqual(len(between), 2)
         self.assertEqual({s.block for s in work}, {1, 2, 3})
 

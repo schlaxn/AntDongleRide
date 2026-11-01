@@ -73,19 +73,24 @@ def clean_rows(rows: list[dict], wheel_m: float, window: int = 15) -> list[dict]
 
 
 # ---- virtual gearing (no cadence sensor) ----
-# Assumed drivetrain: two chainrings (34 and 50 teeth) and an 11-34 cassette (12 cogs).
-# The drivetrain is walked one gear at a time along two ladders (chainring, cog):
-# going harder (upshifting), easiest first:
-UP_LADDER = [(34, 34), (34, 30), (34, 27), (34, 24), (34, 21), (34, 19), (34, 17), (34, 15), (34, 14),
+# Assumed drivetrain: two chainrings (34 and 50 teeth) and a 10-speed cassette,
+# 11-12-13-14-15-17-19-21-24-28 (confirmed by the user).
+# Cross-chain rule: the two largest cogs (24, 28) are not used with the 50, and the two smallest
+# cogs (11, 12) are not used with the 34. So 50/24, 50/28, 34/11 and 34/12 never happen.
+# The drivetrain is walked one gear at a time along two ladders (chainring, cog), like before:
+# going harder (upshifting), easiest first. The 34 ring runs out of cogs at 34/13, then the
+# shift goes to the 50 ring at 50/17.
+UP_LADDER = [(34, 28), (34, 24), (34, 21), (34, 19), (34, 17), (34, 15), (34, 14), (34, 13),
              (50, 17), (50, 15), (50, 14), (50, 13), (50, 12), (50, 11)]
-# going easier (downshifting), hardest first: 50/11 down to about 50/27, then 34/21 comes next
-DOWN_LADDER = [(50, 11), (50, 12), (50, 13), (50, 14), (50, 15), (50, 17), (50, 19), (50, 21), (50, 24),
-               (50, 27), (34, 21), (34, 24), (34, 27), (34, 30), (34, 34)]
-# 50/30 and 50/34 are never used. GEARS: every usable gear, sorted by ratio (index used by the ride).
+# going easier (downshifting), hardest first. The 50 ring runs down to 50/21, then the shift
+# goes to 34/15 (the next easier 34 gear after 50/21).
+DOWN_LADDER = [(50, 11), (50, 12), (50, 13), (50, 14), (50, 15), (50, 17), (50, 19), (50, 21),
+               (34, 15), (34, 17), (34, 19), (34, 21), (34, 24), (34, 28)]
+# GEARS: every usable gear, sorted by ratio (index used by the ride).
 GEARS = sorted(set(UP_LADDER) | set(DOWN_LADDER), key=lambda g: g[0] / g[1])
 GEAR_RATIOS = [f / c for f, c in GEARS]
 CAD_LO, CAD_HI = 85.0, 100.0
-START_GEAR = GEARS.index((34, 21))  # index into GEARS
+START_GEAR = GEARS.index((34, 19))  # index into GEARS
 
 
 def cadence_for(v_ms: float, ratio: float, wheel_m: float) -> float:

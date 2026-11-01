@@ -33,6 +33,7 @@ const LANE_X = 2.5;                                          // rider: 1 m in fr
 const WHEEL_CIRC = 2.105;   // m, same default as the server
 const VIRTUAL_GEAR = 2.6;   // wheel revolutions per crank revolution, used when there is no cadence sensor
 const CRANK = 0.17;
+const ROCK_RAD = 0.0122;   // side-to-side "Kippbewegung" while pedalling: 0.7 degrees (0 turns it off)
 const UP = new THREE.Vector3(0, 1, 0);
 const FWD = new THREE.Vector3(0, 0, 1);
 const V = THREE.Vector3;
@@ -1114,9 +1115,10 @@ export function createWorld(container, onFps = () => {}) {
     wheelAngle -= (vCur * dt) / WHEEL_R;
     rider.setWheels(wheelAngle);
     crankAngle += (cadence / 60) * Math.PI * 2 * dt;
-    // no pedalling bob or sway: the bike stays on the road (its 6 mm bounce at twice the cadence read as jumping)
+    // no up/down bounce: the bike stays on the road. It rocks left and right in sync with the pedals
+    // (one roll per crank turn, peaking when the crank is at 3 and 9 o'clock).
     bike.position.y = WHEEL_R;
-    bike.rotation.z = 0;
+    bike.rotation.z = cadence > 0 ? -ROCK_RAD * Math.sin(crankAngle) : 0;   // sign flipped: the roll ran the wrong way
     rider.pose(crankAngle, cadence > 0);
 
     // ghost stream: spawn at random, then move and draw every ghost

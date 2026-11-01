@@ -17,7 +17,7 @@ from gear import GEAR_RATIOS, GEARS, MAX_RATIO, MIN_RATIO, START_GEAR, cadence_f
 from physics import RoadPhysics
 from power import TrainerPowerModel
 from recorder import Recorder
-from sensors import SensorRoles
+from sensors import LIVE_S, SensorRoles
 from workout import Workout
 
 
@@ -52,6 +52,7 @@ class RideState:
         self.virtual_dist = 0.0     # m on the virtual road
         self.vgear = START_GEAR     # virtual gearing index (0 = gear 1, easiest)
         self.virtual_cadence = None  # rpm from virtual gearing; None when a real cadence sensor is in use
+        self.cadence_rpm_now: float | None = None  # real cadence this tick (0 when a combined sensor is quiet)
         self.latest: dict[str, tuple[float, float]] = {}
         self._last_input: float | None = None   # wall time of the last speed or cadence sample
 
@@ -95,7 +96,7 @@ class RideState:
             self.status = "finished"
 
     # ----- time -----
-    def advance(self, now: float, dt: float) -> None:
+    def advance(self, now: float, dt: float, combined_live: bool = False) -> None:
         """Move the ride forward by dt seconds of wall time (no-op unless running)."""
         if self.status not in ("running", "preview") or dt <= 0:
             return
@@ -114,13 +115,23 @@ class RideState:
         else:
             self.v_virtual = self.phys.step(self.v_virtual, p_rider, grad, dt)
         self.virtual_dist += self.v_virtual * dt
-        # virtual gearing: without a cadence sensor, shift to keep cadence within 75-110 rpm
-        if self.value("cadence", now) is None:
+        # A combined speed & cadence sensor that is still transmitting is a real cadence source:
+        # when it reports no cadence (the crank has stopped) the cadence is 0, not virtual.
+        cad_raw = self.value("cadence", now)
+        if cad_raw is not None:
+            cad = cad_raw
+        elif combined_live:
+            cad = 0.0
+        else:
+            cad = None
+        self.cadence_rpm_now = cad
+        # virtual gearing: without any cadence source, shift to keep cadence within 85-100 rpm
+        if cad is None:
             self.vgear = choose_gear(self.v_virtual, self.vgear, self.wheel_m)
             self.virtual_cadence = round(cadence_for(self.v_virtual, GEAR_RATIOS[self.vgear], self.wheel_m), 1)
         else:
             self.virtual_cadence = None
-        cad = self.value("cadence", now)  # gear needs cadence; without it the gear stays unknown
+        # gear needs cadence; without it the gear stays unknown
         g = gear_ratio(speed_kmh, cad, self.wheel_m) if cad else None
         if g is not None and MIN_RATIO <= g <= MAX_RATIO:
             self._gears.append(g)
@@ -164,7 +175,7 @@ class RideState:
             "phase_left_s": left,
             "next_phase": next_kind,
             "hr_bpm": _r(self.value("heart_rate", now)),
-            "cadence_rpm": _r(self.value("cadence", now)),
+            "cadence_rpm": _r(self.cadence_rpm_now),
             "speed_kmh": _r(self.value("speed", now), 1),
             "power_w": _r(self.power_w),
             "virtual_speed_kmh": _r(self.v_virtual * 3.6, 1),
@@ -303,6 +314,21 @@ class RideEngine:
         self.recorder.close(doc)
         self.recorder = None
 
+    def _combined_live(self, now: float) -> bool:
+        """True if a combined speed & cadence sensor (type 121) that feeds the speed or cadence
+        role is transmitting, whether or not it currently reports a cadence."""
+        wanted = [sel for role, sel in self.roles.selection.items()
+                  if role in ("speed", "cadence") and sel["devtype"] == 121]
+        if not wanted:
+            return False
+        for d in self.session.devices.values():
+            if d["devtype"] != 121:
+                continue
+            for sel in wanted:
+                if sel["devnum"] in (0, d["devnum"]) and now - d.get("last", 0.0) <= LIVE_S:
+                    return True
+        return False
+
     def _loop(self) -> None:
         last = time.time()
         next_tick = 0.0
@@ -340,7 +366,7 @@ class RideEngine:
                 if self.state and self.state.status == "idle" and self.recorder is None:
                     self.state.status = "preview"
                 if self.state and self.state.status in ("running", "preview"):
-                    self.state.advance(now, dt)
+                    self.state.advance(now, dt, combined_live=self._combined_live(now))
                 if self.state and self.state.status == "running":
                     sec = int(self.state.elapsed)
                     if sec != self._last_sec and self.recorder:

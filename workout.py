@@ -57,7 +57,7 @@ class Workout:
     on_s: int = 30
     off_s: int = 15
     between_s: int = 300
-    skip_last_recover: bool = True   # default: the last recovery before the cool-down is skipped
+    skip_last_recover: bool = True   # default: the last recovery of each block is skipped (rest or cool-down follows)
     gradients: dict = field(default_factory=lambda: dict(DEFAULT_GRADIENTS))
     ghost: dict = field(default_factory=lambda: {k: dict(v) for k, v in DEFAULT_GHOST.items()})
 
@@ -144,7 +144,9 @@ class Workout:
             for r in range(1, self.reps + 1):
                 add("work", self.on_s, b, r)
                 last_rep = r == self.reps
-                if not (last_rep and self.skip_last_recover and b == self.blocks):
+                # the last rep of a block skips its recovery; the longer between-block rest (or the
+                # cool-down, after the last block) takes its place
+                if not (last_rep and self.skip_last_recover):
                     add("recover", self.off_s, b, r)
             if b < self.blocks:
                 add("between", self.between_s, b)

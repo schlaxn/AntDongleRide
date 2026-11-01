@@ -7,32 +7,45 @@ WHEEL = 2.105
 
 class VirtualGearingTests(unittest.TestCase):
     def test_usable_gears_follow_the_rules(self):
-        self.assertEqual(len(GEAR_RATIOS), 19)
-        self.assertEqual(GEARS[0], (34, 34))     # easiest
+        # 10-speed cassette: 11 12 13 14 15 17 19 21 24 28
+        self.assertEqual(len(GEAR_RATIOS), 16)
+        self.assertEqual(GEARS[0], (34, 28))     # easiest
         self.assertEqual(GEARS[-1], (50, 11))    # hardest
         self.assertEqual(GEAR_RATIOS, sorted(GEAR_RATIOS))
-        for forbidden in [(50, 30), (50, 34), (34, 13), (34, 12), (34, 11)]:
+        # the two largest cogs are not used with the 50, the two smallest not with the 34
+        for forbidden in [(50, 24), (50, 28), (34, 11), (34, 12), (50, 30), (50, 34)]:
             self.assertNotIn(forbidden, GEARS)
+        cassette = {11, 12, 13, 14, 15, 17, 19, 21, 24, 28}
+        for ring, cog in GEARS:
+            self.assertIn(cog, cassette)
 
-    def test_upshift_runs_through_small_ring_then_to_50_17(self):
-        # at 105 rpm in 34/14 the next harder gear is 50/17, not 50/19 or anything else
-        cur = GEARS.index((34, 14))
-        v = 105 * (34 / 14) * WHEEL / 60
+    def test_upshift_from_34_15_steps_to_34_14(self):
+        # 105 rpm in 34/15: one cog harder (34/14) brings it to about 98 rpm, in band
+        cur = GEARS.index((34, 15))
+        v = 105 * (34 / 15) * WHEEL / 60
+        self.assertEqual(GEARS[choose_gear(v, cur, WHEEL)], (34, 14))
+
+    def test_upshift_from_34_13_goes_to_50_17(self):
+        # 105 rpm in 34/13: the 34 ring is out of cogs, so the shift goes to the 50 ring at 50/17
+        cur = GEARS.index((34, 13))
+        v = 105 * (34 / 13) * WHEEL / 60
         self.assertEqual(GEARS[choose_gear(v, cur, WHEEL)], (50, 17))
 
-    def test_downshift_from_50_27_goes_to_34_21(self):
-        cur = GEARS.index((50, 27))
-        v = 80 * (50 / 27) * WHEEL / 60            # 80 rpm in 50/27: too low a cadence
-        self.assertEqual(GEARS[choose_gear(v, cur, WHEEL)], (34, 21))
-
-    def test_upshift_from_34_21_steps_to_34_19(self):
-        cur = GEARS.index((34, 21))
-        v = 105 * (34 / 21) * WHEEL / 60          # 105 rpm in 34/21: one gear harder
+    def test_downshift_from_50_21_goes_to_34_19(self):
+        # 65 rpm in 50/21: too low a cadence; 34/15 and 34/17 are still too low, 34/19 is in band
+        cur = GEARS.index((50, 21))
+        v = 65 * (50 / 21) * WHEEL / 60
         self.assertEqual(GEARS[choose_gear(v, cur, WHEEL)], (34, 19))
+
+    def test_upshift_from_34_19_steps_to_34_17(self):
+        cur = GEARS.index((34, 19))
+        v = 105 * (34 / 19) * WHEEL / 60          # 105 rpm in 34/19: one gear harder
+        self.assertEqual(GEARS[choose_gear(v, cur, WHEEL)], (34, 17))
 
     def test_cadence_stays_in_band_over_a_speed_range(self):
         gear = START_GEAR
-        for kmh in (12, 16, 20, 24, 28, 32, 36, 30, 22, 14):
+        # below about 14 km/h even 34/28 (the easiest gear) gives under 85 rpm, so the band starts at 14
+        for kmh in (14, 16, 20, 24, 28, 32, 36, 30, 22, 18):
             gear = choose_gear(kmh / 3.6, gear, WHEEL)
             cad = cadence_for(kmh / 3.6, GEAR_RATIOS[gear], WHEEL)
             with self.subTest(kmh=kmh):

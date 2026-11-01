@@ -87,6 +87,26 @@ async function refreshSpeedReady() {
   if (ready !== speedReady) { speedReady = ready; updateButtons(); }
 }
 setInterval(refreshSpeedReady, 2000);
+
+// Keep the screen awake like a game: while riding, or while the speed sensor is live.
+// Windows would otherwise dim and sleep the display after a few minutes of no input.
+let wakeLock = null;
+async function keepAwake() {
+  const want = document.body.classList.contains("riding") || speedReady;
+  try {
+    if (want && !wakeLock && "wakeLock" in navigator) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    } else if (!want && wakeLock) {
+      const lock = wakeLock;
+      wakeLock = null;
+      await lock.release();
+    }
+  } catch (_) { wakeLock = null; }   // not supported or refused: the ride still works
+}
+setInterval(keepAwake, 2000);
+// the browser drops the lock when the tab is hidden; take it again when the page is back
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
 function updateButtons() {
   const running = status === "running", paused = status === "paused";
   // full-screen riding layout while a ride is running or paused; back to setup when it ends
