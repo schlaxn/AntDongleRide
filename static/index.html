@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ANT+ Debug</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c3038; --text:#e4e7ec; --muted:#8a919c;
+          --ok:#3fb950; --bad:#f85149; --warn:#d29922; --accent:#58a6ff; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.4 system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0 12px 0 0; }
+  button { background:#2a2f38; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:5px 10px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:#1f4d7a; }
+  input[type=text], select { background:#101217; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 6px; }
+  .pill { padding:2px 8px; border-radius:10px; background:#2a2f38; color:var(--muted); }
+  .pill.ok { background:#1a3a24; color:var(--ok); } .pill.bad { background:#3d1d1b; color:var(--bad); }
+  main { display:grid; grid-template-columns: minmax(0,2fr) minmax(280px,1fr); gap:12px; padding:12px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; min-width:0; }
+  section h2 { font-size:13px; margin:0 0 8px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+  .log { height:420px; overflow:auto; font:12px/1.35 Consolas, monospace; border:1px solid var(--line); border-radius:4px; background:#101217; }
+  table { width:100%; border-collapse:collapse; }
+  .log td { padding:2px 6px; white-space:nowrap; } .log td.hex { white-space:normal; word-break:break-all; color:#b6bdc8; }
+  .log tr.tx td:first-child { color:var(--warn); } .log tr.rx td:first-child { color:var(--ok); }
+  .log tr.ev td { background:#2a2414; }
+  .muted { color:var(--muted); }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  .devices td, .devices th { padding:4px 6px; border-bottom:1px solid var(--line); text-align:left; }
+  .charts { grid-column: 1 / -1; display:grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr)); gap:12px; }
+  .chart { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; }
+  .chart .title { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; }
+  .chart .title b { color:var(--text); font-size:20px; font-weight:600; }
+  canvas { width:100%; height:150px; display:block; }
+  .events { max-height:150px; overflow:auto; font:12px Consolas, monospace; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ANT+ Debug</h1>
+  <button id="btnConnect" class="primary">Connect</button>
+  <button id="btnDisconnect">Disconnect</button>
+  <button id="btnReset">Reset chip</button>
+  <span class="pill" id="status">disconnected</span>
+  <span style="flex:1"></span>
+  <span class="muted">Scan:</span>
+  <label><input type="checkbox" class="dt" value="120" checked> HR 120</label>
+  <label><input type="checkbox" class="dt" value="11" checked> Power 11</label>
+  <label><input type="checkbox" class="dt" value="121" checked> Speed&amp;cad 121</label>
+  <label><input type="checkbox" class="dt" value="122" checked> Cadence 122</label>
+  <label><input type="checkbox" class="dt" value="123" checked> Speed 123</label>
+  <button id="btnScan" class="primary">Scan</button>
+  <button id="btnStop">Stop</button>
+</header>
+
+<main>
+  <section>
+    <div class="bar">
+      <h2 style="margin:0 8px 0 0">Packets</h2>
+      <input type="text" id="filter" placeholder="filter (name, hex, text)" size="28">
+      <label><input type="checkbox" id="pause"> pause</label>
+      <label><input type="checkbox" id="autoscroll" checked> autoscroll</label>
+      <button id="btnClear">Clear</button>
+      <span class="muted" id="counts"></span>
+    </div>
+    <div class="log"><table><tbody id="log"></tbody></table></div>
+    <div class="bar" style="margin-top:8px">
+      <span class="muted">Send raw message</span>
+      <input type="text" id="rawId" placeholder="msg id e.g. 0x4A" size="10">
+      <input type="text" id="rawData" placeholder="payload hex e.g. 00" size="30">
+      <button id="btnSend">Send</button>
+      <span class="muted">Unsafe for ANT state: only use if you know the message.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Sensors</h2>
+    <table class="devices">
+      <thead><tr><th>Type</th><th>devnum</th><th>ch</th><th>msgs</th><th>last</th></tr></thead>
+      <tbody id="devices"><tr><td class="muted" colspan="5">none yet</td></tr></tbody>
+    </table>
+    <h2 style="margin-top:12px">Bluetooth heart rate (laptop)</h2>
+    <div class="bar">
+      <button id="btnBleScan">Scan BLE</button>
+      <select id="bleDevices" style="min-width:180px"><option value="">- scan first -</option></select>
+      <button id="btnBleStart" class="primary">Connect</button>
+      <button id="btnBleStop">Disconnect</button>
+    </div>
+    <div class="muted" id="bleState">idle</div>
+    <h2 style="margin-top:12px">Channel events</h2>
+    <div class="events" id="events"></div>
+    <h2 style="margin-top:12px">Stick</h2>
+    <div class="muted" id="stickinfo">-</div>
+  </section>
+
+  <div class="charts">
+    <div class="chart"><div class="title"><span>Heart rate</span><b id="v-heart_rate">-</b></div><canvas id="c-heart_rate"></canvas></div>
+    <div class="chart"><div class="title"><span>Power</span><b id="v-power">-</b></div><canvas id="c-power"></canvas></div>
+    <div class="chart"><div class="title"><span>Cadence</span><b id="v-cadence">-</b></div><canvas id="c-cadence"></canvas></div>
+    <div class="chart"><div class="title"><span>Speed</span><b id="v-speed">-</b></div><canvas id="c-speed"></canvas></div>
+  </div>
+  <section style="grid-column:1/-1">
+    <div class="bar">
+      <h2 style="margin:0 8px 0 0">Graph</h2>
+      <span class="muted">window</span>
+      <select id="window">
+        <option value="30">30 s</option><option value="120" selected>2 min</option><option value="600">10 min</option>
+      </select>
+      <label><input type="checkbox" id="chartPause"> freeze</label>
+      <a href="/api/export.csv" style="color:var(--accent)">Export samples (CSV)</a>
+    </div>
+  </section>
+</main>
+
+<script>
+const METRICS = {
+  heart_rate: { unit: "bpm", color: "#f85149", min: 40, max: 200 },
+  power:      { unit: "W",   color: "#d29922", min: 0,  max: 400 },
+  cadence:    { unit: "rpm", color: "#3fb950", min: 0,  max: 130 },
+  speed:      { unit: "km/h",color: "#58a6ff", min: 0,  max: 50 },
+};
+const KEEP_S = 600;
+const samples = [];       // {ts, metric, value}
+const $ = (id) => document.getElementById(id);
+const fmtTime = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false }) + "." + String(Math.floor((t % 1) * 1000)).padStart(3, "0");
+
+// ---------- packet log ----------
+const LOG_MAX = 1000;
+let logItems = [];
+let logCount = 0;
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+function rowFor(item) {
+  const tr = document.createElement("tr");
+  tr.className = item.dir ? item.dir.toLowerCase() : "ev";
+  tr.innerHTML = `<td>${item.dir || "EV"}</td><td>${fmtTime(item.ts)}</td><td>${esc(item.name || item.text)}</td><td class="hex">${esc(item.hex)}</td><td>${esc(item.desc)}</td>`;
+  return tr;
+}
+function renderLog() {
+  const f = $("filter").value.trim().toLowerCase();
+  const body = $("log");
+  body.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (const it of logItems) {
+    if (f && !(it.name + " " + it.hex + " " + it.desc + " " + (it.text || "")).toLowerCase().includes(f)) continue;
+    frag.appendChild(rowFor(it));
+  }
+  body.appendChild(frag);
+  if ($("autoscroll").checked) body.parentElement.parentElement.scrollTop = 1e9;
+}
+function addLog(item) {
+  if ($("pause").checked) return;
+  logCount++;
+  logItems.push(item);
+  if (logItems.length > LOG_MAX) logItems.shift();
+  const f = $("filter").value.trim().toLowerCase();
+  if (f && !(item.name + " " + item.hex + " " + item.desc).toLowerCase().includes(f)) return;
+  const body = $("log");
+  body.appendChild(rowFor(item));
+  while (body.children.length > LOG_MAX) body.removeChild(body.firstChild);
+  if ($("autoscroll").checked) body.parentElement.parentElement.scrollTop = 1e9;
+}
+$("filter").addEventListener("input", renderLog);
+$("btnClear").onclick = () => { logItems = []; $("log").innerHTML = ""; logCount = 0; };
+
+// ---------- live stream ----------
+function connectStream() {
+  const es = new EventSource("/api/stream");
+  es.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "frame") {
+      addLog(m);
+      $("counts").textContent = logCount + " frames";
+    } else if (m.type === "sample") {
+      samples.push(m);
+      const cut = m.ts - KEEP_S;
+      while (samples.length && samples[0].ts < cut) samples.shift();
+      $("v-" + m.metric) && ($("v-" + m.metric).textContent = m.value + " " + (METRICS[m.metric]?.unit || ""));
+    } else if (m.type === "event") {
+      const d = document.createElement("div");
+      d.textContent = fmtTime(m.ts) + "  " + m.text;
+      d.style.color = m.text.includes("error") || m.text.includes("TIMEOUT") ? "var(--warn)" : "var(--muted)";
+      $("events").prepend(d);
+      addLog({ dir: null, ts: m.ts, name: "EVENT", text: m.text, hex: "", desc: m.text });
+    } else if (m.type === "error") {
+      setStatus(false, m.message);
+    }
+  };
+  es.onerror = () => setStatus(false, "stream lost - retrying");
+}
+
+// ---------- state polling ----------
+function setStatus(ok, text) {
+  const p = $("status");
+  p.textContent = text || (ok ? "connected" : "disconnected");
+  p.className = "pill " + (ok ? "ok" : "bad");
+}
+async function refresh() {
+  try {
+    const s = await (await fetch("/api/state")).json();
+    setStatus(s.connected, s.connected ? "connected" : null);
+    $("stickinfo").textContent = s.usb ? `${s.usb.product || "ANT stick"} VID ${s.usb.vid} PID ${s.usb.pid} · fw bcd ${s.usb.bcdDevice} · bad checksums ${s.bad_checksums}` : "not connected";
+    const rows = s.devices.map(d => `<tr><td>${d.name}</td><td>${d.devnum}</td><td>${d.channel ?? ""}</td><td>${d.count}</td><td class="muted">${fmtTime(d.last)}</td></tr>`);
+    $("devices").innerHTML = rows.length ? rows.join("") : `<tr><td class="muted" colspan="5">none yet</td></tr>`;
+  } catch (_) { setStatus(false, "server unreachable"); }
+}
+setInterval(refresh, 2000); refresh();
+
+// ---------- buttons ----------
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) alert(j.error || ("HTTP " + r.status));
+  refresh();
+  return j;
+}
+$("btnConnect").onclick = () => post("/api/connect");
+$("btnDisconnect").onclick = () => post("/api/disconnect");
+$("btnReset").onclick = () => post("/api/reset");
+$("btnStop").onclick = () => post("/api/stop");
+$("btnScan").onclick = () => {
+  const types = [...document.querySelectorAll(".dt:checked")].map(c => +c.value);
+  post("/api/scan", { types });
+};
+$("btnSend").onclick = () => post("/api/send", { msg_id: $("rawId").value, data: $("rawData").value });
+
+// Bluetooth heart rate (laptop adapter)
+$("btnBleScan").onclick = async () => {
+  $("bleState").textContent = "scanning (6 s)...";
+  const r = await post("/api/ble/scan");
+  if (!r.ok) { $("bleState").textContent = "scan failed"; return; }
+  const sel = $("bleDevices");
+  sel.innerHTML = "";
+  const list = r.devices.filter(d => d.heart_rate || d.name !== "(no name)");
+  for (const d of list) {
+    const o = document.createElement("option");
+    o.value = d.address;
+    o.textContent = `${d.heart_rate ? "♥ " : ""}${d.name} (${d.rssi} dBm)`;
+    sel.appendChild(o);
+  }
+  if (!list.length) sel.innerHTML = `<option value="">no devices found</option>`;
+  $("bleState").textContent = `${list.length} device(s) found - pick the watch (♥ = advertises heart rate)`;
+};
+$("btnBleStart").onclick = async () => {
+  const addr = $("bleDevices").value;
+  if (!addr) return alert("Scan first, then pick a device");
+  await post("/api/ble/start", { address: addr });
+  $("bleState").textContent = "connecting...";
+};
+$("btnBleStop").onclick = () => post("/api/ble/stop").then(() => { $("bleState").textContent = "stopped"; });
+setInterval(async () => {
+  try {
+    const s = await (await fetch("/api/ble/state")).json();
+    if (s.running || s.address) $("bleState").textContent = `${s.state}${s.address ? " - " + s.address : ""}`;
+  } catch (_) {}
+}, 2000);
+
+// ---------- charts ----------
+function drawChart(metric, now, windowS) {
+  const canvas = $("c-" + metric);
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const m = METRICS[metric];
+  const t0 = now - windowS;
+  const pts = samples.filter(s => s.metric === metric && s.ts >= t0);
+  let lo = m.min, hi = m.max;
+  if (pts.length) {
+    const vals = pts.map(p => p.value);
+    lo = Math.min(m.min, ...vals); hi = Math.max(m.max === m.min ? 1 : m.min + 1, ...vals);
+    if (hi - lo < 1e-9) hi = lo + 1;
+  }
+  const pad = 4, x = (t) => ((t - t0) / windowS) * w, y = (v) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+  ctx.strokeStyle = "#2c3038"; ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) { const yy = Math.round(h * i / 4) + .5; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke(); }
+  ctx.strokeStyle = m.color; ctx.lineWidth = 1.5; ctx.beginPath();
+  pts.forEach((p, i) => { const px = x(p.ts), py = y(p.value); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+  ctx.stroke();
+  ctx.fillStyle = "#8a919c"; ctx.font = "11px Segoe UI, sans-serif";
+  ctx.fillText(`${hi.toFixed(0)}`, 4, 12); ctx.fillText(`${lo.toFixed(0)}`, 4, h - 4);
+  ctx.textAlign = "right"; ctx.fillText(`-${windowS}s`, w - 4, h - 4); ctx.textAlign = "left";
+}
+let frozenAt = null;
+function frame() {
+  const windowS = +$("window").value;
+  if ($("chartPause").checked) { if (!frozenAt) frozenAt = Date.now() / 1000; }
+  else frozenAt = null;
+  const now = frozenAt ?? Date.now() / 1000;
+  for (const k of Object.keys(METRICS)) drawChart(k, now, windowS);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+connectStream();
+</script>
+</body>
+</html>

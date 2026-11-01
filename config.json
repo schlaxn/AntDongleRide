@@ -1,0 +1,10 @@
+{
+  "wheel_circumference_m": 2.1,
+  "gradients": {
+    "warmup": 1.0,
+    "work": 8.0,
+    "recover": -6.0,
+    "between": -2.0,
+    "cooldown": 0.0
+  }
+}

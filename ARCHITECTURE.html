@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AntDongle Architecture</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #5b6475;
+    --line: #d9dee7; --accent: #2563eb; --ok: #15803d; --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f131a; --panel: #171d27; --ink: #e6eaf2; --muted: #9aa4b5;
+      --line: #2a3344; --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f131a; --panel: #171d27; --ink: #e6eaf2; --muted: #9aa4b5;
+    --line: #2a3344; --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+  header h1 { margin: 0 0 4px; font-size: 28px; }
+  header p { margin: 0; color: var(--muted); }
+  nav { margin: 20px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  nav a {
+    color: var(--accent); text-decoration: none; border: 1px solid var(--line);
+    border-radius: 999px; padding: 4px 12px; font-size: 13px; background: var(--panel);
+  }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px; margin: 16px 0;
+  }
+  section h2 { margin: 0 0 6px; font-size: 20px; }
+  section > p.lead { margin: 0 0 14px; color: var(--muted); }
+  .mermaid { overflow-x: auto; text-align: center; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  code { font: 13px ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--line) 50%, transparent); padding: 1px 5px; border-radius: 4px; }
+  .tag { display: inline-block; font-size: 12px; border-radius: 6px; padding: 1px 7px; border: 1px solid var(--line); color: var(--muted); }
+  .warn { color: var(--warn); }
+  .ok { color: var(--ok); }
+  ul { margin: 6px 0 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .wide-table { overflow-x: auto; }
+  @media (max-width: 640px) {
+    main { padding: 16px 12px 48px; }
+    section { padding: 14px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>AntDongle virtual trainer: architecture</h1>
+  <p>Flask server + browser 3D view that turns a real bike on an Elite Qubo trainer into a virtual ride.
+     Derived from <code>HANDOVER.md</code> and the code in the project folder (as of 2026-11-01).</p>
+</header>
+
+<nav>
+  <a href="#context">1 System context</a>
+  <a href="#layers">2 Layers</a>
+  <a href="#server">3 Server modules</a>
+  <a href="#browser">4 Browser modules</a>
+  <a href="#flows">5 Runtime flows</a>
+  <a href="#routes">6 HTTP API</a>
+  <a href="#tools">7 Tools and libraries</a>
+  <a href="#data">8 Data and files</a>
+  <a href="#status">9 Status and open items</a>
+</nav>
+
+<!-- 1 -->
+<section id="context">
+  <h2>1. System context</h2>
+  <p class="lead">What the app talks to. Everything runs on one laptop; the only external parts are the
+     sticks, sensors and the trainer, which are reached through USB and Bluetooth.</p>
+<pre class="mermaid">
+flowchart LR
+  rider(["Rider"])
+  subgraph laptop["Laptop (Windows 11, Python 3.11)"]
+    server["Flask server<br/>app.py :5000"]
+    browser["Browser page<br/>/ride (Three.js 3D view)"]
+    fs[("recordings/<br/>CSV + JSON")]
+  end
+  ant["ANT USB Stick 2<br/>VID 0FCF PID 1008<br/>libusb-win32 driver"]
+  hrb["Heart-rate strap<br/>ANT device type 120"]
+  spd["Garmin speed sensor<br/>ANT device type 123"]
+  watch["Watch / HR over BLE"]
+  trainer["Elite Qubo Power Fluid<br/>(trainer, power model)"]
+  bike["Orbea Orca on trainer"]
+
+  rider --> bike
+  bike --- trainer
+  trainer -. "speed, rolling resistance" .- bike
+  hrb -- "ANT 2.4 GHz" --> ant
+  spd -- "ANT 2.4 GHz" --> ant
+  ant -- "USB (pyusb)" --> server
+  watch -- "BLE (bleak)" --> server
+  server -- "HTTP + SSE" --> browser
+  browser -- "fetch / EventSource" --> server
+  server -- "writes" --> fs
+  rider -- "views and controls" --> browser
+</pre>
+</section>
+
+<!-- 2 -->
+<section id="layers">
+  <h2>2. Layers</h2>
+  <p class="lead">Five layers. Hardware access sits at the bottom; the browser is the only UI.</p>
+<pre class="mermaid">
+flowchart TB
+  subgraph L1["Presentation (browser)"]
+    html["static/ride.html<br/>static/index.html (debug UI)"]
+    js["static/ride/*.js<br/>main, hud, world, sensors, audio"]
+  end
+  subgraph L2["API / transport"]
+    flask["Flask routes in app.py<br/>JSON REST + SSE /api/stream"]
+  end
+  subgraph L3["Application / domain"]
+    ride["ride.py<br/>RideState + RideEngine"]
+    workout["workout.py<br/>intervals, ghosts, gradients"]
+    sensors["sensors.py<br/>sensor roles"]
+    sim["sim.py<br/>simulated rider"]
+  end
+  subgraph L4["Models (pure physics)"]
+    phys["physics.py<br/>road physics"]
+    power["power.py<br/>trainer power curve"]
+    gear["gear.py<br/>virtual gearbox"]
+  end
+  subgraph L5["Device and storage access"]
+    antses["ant/session.py<br/>channels, reader thread"]
+    antproto["ant/protocol.py + profiles.py<br/>frames, device decoders"]
+    antusb["ant/usbdev.py<br/>libusb via pyusb"]
+    blemod["ble.py<br/>bleak heart-rate client"]
+    rec["recorder.py<br/>CSV + session.json"]
+  end
+
+  html --> js
+  js -- "HTTP / SSE" --> flask
+  flask --> ride
+  flask --> workout
+  flask --> sensors
+  flask --> sim
+  flask --> antses
+  flask --> blemod
+  ride --> phys
+  ride --> power
+  ride --> gear
+  ride --> rec
+  workout --> phys
+  workout --> power
+  workout --> gear
+  antses --> antproto
+  antses --> antusb
+  sim -. "replaces ANT when --simulate" .-> ride
+</pre>
+</section>
+
+<!-- 3 -->
+<section id="server">
+  <h2>3. Server modules (Python)</h2>
+  <p class="lead">Module dependencies. Arrows point from the importing module to the imported one.</p>
+<pre class="mermaid">
+flowchart LR
+  app["app.py<br/>Flask, argparse, SSE"]
+  diag["diag.py<br/>stage-by-stage check"]
+  ride["ride.py<br/>RideState, RideEngine"]
+  workout["workout.py<br/>Workout dataclass"]
+  sensors["sensors.py<br/>SensorRoles"]
+  ble["ble.py<br/>BleHeartRate"]
+  sim["sim.py<br/>SimulatedRider"]
+  gear["gear.py"]
+  physics["physics.py<br/>RoadPhysics"]
+  power["power.py<br/>TrainerPowerModel"]
+  recorder["recorder.py<br/>Recorder"]
+  profiles["ant/profiles.py<br/>DEVICE_TYPES, Decoder"]
+  session["ant/session.py<br/>AntSession"]
+  protocol["ant/protocol.py"]
+  usbdev["ant/usbdev.py<br/>AntUsb"]
+
+  app --> ride
+  app --> workout
+  app --> sensors
+  app --> ble
+  app --> sim
+  app --> profiles
+  app --> session
+  app --> usbdev
+  ride --> gear
+  ride --> physics
+  ride --> power
+  ride --> recorder
+  ride --> sensors
+  ride --> workout
+  workout --> gear
+  workout --> physics
+  workout --> power
+  session --> profiles
+  session --> protocol
+  session --> usbdev
+  diag --> profiles
+  diag --> session
+  diag --> usbdev
+</pre>
+<p class="lead" style="margin-top:14px">Unit tests in <code>tests/</code> (82 tests at handover) cover
+   <code>physics</code>, <code>workout</code>, <code>ride</code>, <code>gear</code>, <code>power</code>,
+   <code>sensors</code>, <code>ble</code>, <code>protocol</code> and <code>profiles</code>.</p>
+</section>
+
+<!-- 4 -->
+<section id="browser">
+  <h2>4. Browser modules</h2>
+  <p class="lead">The page is one ES-module entry point (<code>main.js</code>) plus helpers. Three.js is
+     vendored locally (r170), not loaded from a CDN.</p>
+<pre class="mermaid">
+flowchart LR
+  rhtml["static/ride.html<br/>layout, HUD tiles, panels"]
+  main["ride/main.js<br/>controller, API calls, SSE,<br/>start gate, presets, ghost table"]
+  hud["ride/hud.js<br/>HUD tiles, timeline"]
+  world["ride/world.js<br/>road, rider rig, ghosts,<br/>scenery, camera, sun"]
+  sens["ride/sensors.js<br/>sensor check dialog"]
+  audio["ride/audio.js<br/>countdown and phase beeps"]
+  three["static/vendor/three.module.min.js<br/>Three.js r170"]
+  hist["/history page<br/>(planned, see open items)"]
+
+  rhtml -- "module script" --> main
+  main --> hud
+  main --> world
+  main --> sens
+  main --> audio
+  world --> three
+  hist -. "not built yet" .-> main
+</pre>
+</section>
+
+<!-- 5 -->
+<section id="flows">
+  <h2>5. Runtime flows</h2>
+  <p class="lead">Two flows matter most: the sensor path (how a sample becomes a HUD number) and the
+     start-ride sequence.</p>
+
+  <h3>5a. Sensor sample to screen</h3>
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant HW as ANT stick / BLE
+  participant SES as AntSession (reader thread)
+  participant SR as SensorRoles
+  participant RE as RideEngine (thread)
+  participant RS as RideState
+  participant PH as RoadPhysics + TrainerPowerModel
+  participant API as Flask /api/stream (SSE)
+  participant UI as Browser (hud.js, world.js)
+
+  HW->>SES: broadcast pages (HR, speed, cadence)
+  SES->>SES: decode via profiles.Decoder
+  SES-->>RE: publish Sample to subscriber queue
+  RE->>SR: which device feeds which role
+  RE->>RS: measured speed, HR, cadence
+  RS->>PH: power absorbed at measured speed
+  PH-->>RS: virtual speed, distance, power
+  RS->>RS: gearing (only without cadence sensor)
+  RE->>API: tick (snapshot)
+  API-->>UI: SSE event
+  UI->>UI: update HUD tiles, move rider and ghosts
+</pre>
+
+  <h3>5b. Start a workout ride</h3>
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor R as Rider
+  participant P as ride.html / main.js
+  participant A as app.py
+  participant W as workout.py
+  participant E as RideEngine
+  participant REC as recorder.py
+
+  R->>P: choose workout, preset, ghost mode
+  P->>A: POST /api/workout (shorthand or fields)
+  A->>W: Workout(...) / parse_shorthand
+  W-->>A: to_dict()
+  A-->>P: workout profile (table, gradients)
+  R->>P: press start (start gate)
+  P->>A: POST /api/ride/start
+  A->>E: start thread
+  E->>REC: open recordings/&lt;timestamp&gt;/
+  loop every tick
+    E->>E: consume samples, update RideState
+    E-->>P: SSE /api/stream
+  end
+  R->>P: stop
+  P->>A: POST /api/ride/stop
+  A->>E: stop, close files
+  E->>REC: ride.csv, ride_clean.csv, samples.csv, session.json
+</pre>
+</section>
+
+<!-- 6 -->
+<section id="routes">
+  <h2>6. HTTP API (Flask, <code>app.py</code>)</h2>
+  <p class="lead">Grouped by area. All JSON unless noted. <span class="tag">SSE</span> is a server-sent event stream.</p>
+  <div class="wide-table">
+  <table>
+    <tr><th>Area</th><th>Routes</th><th>Purpose</th></tr>
+    <tr><td>Pages</td><td><code>GET /</code>, <code>/ride</code>, <code>/history</code></td>
+      <td>Debug UI, ride page. <code>/history</code> is registered, but <code>static/history.html</code> does not exist yet.</td></tr>
+    <tr><td>Device</td><td><code>/api/connect</code>, <code>/api/disconnect</code>, <code>/api/reset</code>, <code>/api/scan</code>, <code>/api/stop</code>, <code>/api/send</code></td>
+      <td>ANT stick lifecycle, raw scan and send for debugging.</td></tr>
+    <tr><td>Sensors</td><td><code>/api/sensors</code>, <code>/search</code>, <code>/select</code>, <code>/reset</code></td>
+      <td>Channel search and pairing; sensor role selection.</td></tr>
+    <tr><td>BLE</td><td><code>/api/ble/scan</code>, <code>/start</code>, <code>/stop</code>, <code>/state</code></td>
+      <td>Watch heart rate via bleak.</td></tr>
+    <tr><td>Workout</td><td><code>GET/POST /api/workout</code></td><td>Build and read the interval workout.</td></tr>
+    <tr><td>Ride</td><td><code>/api/ride/start</code>, <code>/pause</code>, <code>/resume</code>, <code>/stop</code>, <code>GET /state</code></td>
+      <td>Control the RideEngine.</td></tr>
+    <tr><td>Recordings</td><td><code>GET /api/rides</code>, <code>GET /api/rides/&lt;id&gt;/&lt;file&gt;</code>, <code>GET /api/export.csv</code></td>
+      <td>List and download recorded rides.</td></tr>
+    <tr><td>Config</td><td><code>GET/POST /api/config</code></td><td>Reads <code>config.json</code> (wheel circumference, gradients).</td></tr>
+    <tr><td>Testing</td><td><code>GET/POST /api/test/speed-multiplier</code></td>
+      <td>Fake speed sensor multiplier (currently ×5 at runtime, resets to ×1 on restart).</td></tr>
+    <tr><td>Stream</td><td><code>GET /api/stream</code> <span class="tag">SSE</span></td><td>Live ride ticks to the browser.</td></tr>
+  </table>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="tools">
+  <h2>7. Tools and libraries</h2>
+  <div class="grid">
+    <div>
+      <h3>Python runtime</h3>
+      <ul>
+        <li><b>Python 3.11</b></li>
+        <li><b>Flask</b> (&gt;= 3.0): web server, routes, SSE</li>
+        <li><b>pyusb</b> (&gt;= 1.2): USB access to the ANT stick (libusb-win32 driver, <code>libusb0.dll</code>)</li>
+        <li><b>bleak</b>: Bluetooth LE heart-rate client</li>
+        <li><b>numpy</b>, <b>matplotlib</b>, <b>pillow</b>: analysis and plots</li>
+        <li><b>esprima</b>: syntax check of page JS only (no <code>?.</code> / <code>??</code>)</li>
+        <li><b>unittest</b>: test runner (<code>python -m unittest discover -s tests</code>)</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Browser</h3>
+      <ul>
+        <li><b>ES modules</b> (no bundler, no build step)</li>
+        <li><b>Three.js r170</b>, vendored in <code>static/vendor/</code></li>
+        <li><b>EventSource</b> (SSE) for live ticks</li>
+        <li><b>Web Audio</b> via <code>audio.js</code> for beeps</li>
+        <li>Plain HTML/CSS layout (no framework)</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Hardware and protocols</h3>
+      <ul>
+        <li><b>ANT USB Stick 2</b>, ANT 2.4 GHz, up to 8 channels</li>
+        <li><b>ANT+ profiles</b>: heart rate (type 120), speed (type 123)</li>
+        <li><b>Bluetooth LE</b> heart rate via laptop adapter</li>
+        <li><b>Elite Qubo Power Fluid</b> trainer (power model fitted to 2 points + manufacturer chart)</li>
+        <li><b>Dynastream libusb-win32</b> driver</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Models and assumptions</h3>
+      <ul>
+        <li>Road physics: mass 76 kg, Crr 0.005, CdA 0.32 m² <span class="warn">(guess)</span>, rho 1.2</li>
+        <li>Virtual gearing: 34/50T front, 11-34 rear, 13 usable gears, cadence band 85-100 rpm, target 92.5 rpm</li>
+        <li>Wheel circumference 2.105 m (28" x 30 mm)</li>
+        <li>Chainstay 405 mm and wheelbase 1010 mm <span class="warn">(estimates)</span></li>
+      </ul>
+    </div>
+  </div>
+
+<pre class="mermaid">
+flowchart LR
+  subgraph py["Python server"]
+    flask2["Flask"] --- pyusb["pyusb"] --- bleak["bleak"]
+    flask2 --- np["numpy / matplotlib / pillow"]
+  end
+  subgraph js["Browser"]
+    esm["ES modules"] --- three2["Three.js r170 (local)"]
+    esm --- sse["EventSource (SSE)"]
+    esm --- wa["Web Audio"]
+  end
+  subgraph hw["Hardware"]
+    stick["ANT USB Stick 2"] --- sensorsHW["HR strap, speed sensor"]
+    qubo["Elite Qubo trainer"]
+    btw["BLE watch"]
+  end
+  pyusb --> stick
+  bleak --> btw
+  flask2 -. "HTTP / SSE" .- esm
+</pre>
+</section>
+
+<!-- 8 -->
+<section id="data">
+  <h2>8. Data and files</h2>
+  <p class="lead">Persistent state is file-based. Nothing is in a database.</p>
+<pre class="mermaid">
+flowchart TB
+  cfg["config.json<br/>wheel_circumference_m, gradients"]
+  rides["recordings/&lt;YYYY-MM-DD_HHMMSS&gt;/"]
+  ride_csv["ride.csv<br/>raw ride rows"]
+  clean["ride_clean.csv<br/>cleaned via gear.clean_rows"]
+  samples["samples.csv<br/>raw sensor samples"]
+  session["session.json<br/>summary"]
+  req["requirements.txt<br/>pyusb, flask"]
+  cfg -- "read/write via /api/config" --> app2["app.py"]
+  app2 -- "RideEngine" --> rides
+  rides --> ride_csv
+  rides --> clean
+  rides --> samples
+  rides --> session
+  rides -- "/api/rides, /api/export.csv" --> dl["Browser download"]
+</pre>
+</section>
+
+<!-- 9 -->
+<section id="status">
+  <h2>9. Status and open items</h2>
+  <p class="lead">From <code>HANDOVER.md</code> section 5, priority order.</p>
+<pre class="mermaid">
+flowchart TD
+  o1["1. Ghost legs and wheels missing<br/>(translucent material blends with road?)"]
+  o2["2. History page: route exists, static/history.html missing"]
+  o3["3. 3D view not browser-tested since last changes"]
+  o4["4. Ghost pace settings still starting point for parameterized ghosts"]
+  o5["5. Recordings not verified end to end with virtual cadence and gear"]
+  o6["6. Not yet asked: separate speed multiplier input, README, config for mass and CdA"]
+  o1 --> o3
+  o3 --> o5
+  o2 --> o5
+  o4 -.-> o1
+  classDef warn fill:#fef3c7,stroke:#b45309,color:#1d2330;
+  class o1,o2 warn;
+</pre>
+</section>
+
+</main>
+
+<script type="module">
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const { default: mermaid } = await import("https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs");
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: dark ? "dark" : "default",
+    securityLevel: "strict",
+    flowchart: { htmlLabels: true, curve: "basis" },
+    sequence: { mirrorActors: false },
+  });
+</script>
+</body>
+</html>
