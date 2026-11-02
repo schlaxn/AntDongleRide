@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Virtual Row</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    :root { --bg:#eef3f6; --panel:#ffffff; --line:#d6e0e6; --text:#16232b; --muted:#60717c;
+          --work:#c2410c; --recover:#2563eb; --warm:#ca8a04; --cool:#0d9488; --accent:#0e7490; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.4 system-ui, Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 14px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0 10px 0 0; }
+  button { background:#f1f5f8; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:#0e7490; } button.danger { background:#fecaca; }
+  button:disabled { opacity:.4; cursor:default; }
+  input, select { background:#f3f6f8; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 6px; font:inherit; }
+  input[type=number] { width:72px; }
+  .pill { padding:2px 9px; border-radius:10px; background:#f1f5f8; color:var(--muted); font-size:12px; }
+  .pill.ok { background:#dcfce7; color:#15803d; } .pill.bad { background:#fee2e2; color:#b91c1c; }
+  .muted { color:var(--muted); }
+  [hidden] { display:none !important; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 340px; gap:12px; padding:12px; }
+  #view { position:relative; min-height:420px; background:#dfeef5; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  #viewMsg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:20px; pointer-events:none; z-index:1; }
+  .banner { position:absolute; left:12px; top:12px; right:12px; pointer-events:none; z-index:2; }
+  .phase { font-size:44px; font-weight:800; letter-spacing:.04em; padding:6px 14px; border-radius:6px; display:inline-block; background:rgba(255,255,255,.85); }
+  .phase.work { color:var(--work); } .phase.recover { color:var(--recover); }
+  .phase.warmup { color:var(--warm); } .phase.cooldown { color:var(--cool); }
+  .phase.between, .phase.idle, .phase.none, .phase.finished, .phase.preview { color:var(--muted); }
+  .sub { margin-top:6px; font-size:16px; background:rgba(255,255,255,.85); padding:3px 10px; border-radius:4px; display:inline-block; }
+  aside section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  aside h2 { font-size:12px; margin:0 0 8px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+  .metrics { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+  .metric { background:#f3f6f8; border-radius:6px; padding:8px 10px; min-width:0; overflow:hidden; white-space:nowrap; }
+  .metric .k { font-size:11px; color:var(--muted); text-transform:uppercase; }
+  .metric .v { font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .metric .u { font-size:12px; color:var(--muted); margin-left:4px; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0; }
+  .row label { color:var(--muted); font-size:12px; min-width:92px; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  #timelineWrap { margin:0 12px 12px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  #timeline { width:100%; height:110px; display:block; }
+  .tl-meta { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:4px; }
+  details summary { cursor:pointer; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; max-width:640px; width:92vw; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { font-size:16px; }
+  dialog .row label { min-width:110px; }
+  .ivtable { display: grid; grid-template-columns: 110px 1fr; gap: 6px 8px; align-items: center; margin-top: 8px; }
+  .ivhead { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .ivtable input { width:100%; min-width:0; }
+  /* desktop: the page fills the window; only the control panel scrolls */
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  header { flex: none; }
+  main { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; }
+  #view { height: 100%; min-height: 0; }
+  aside { min-height: 0; overflow-y: auto; padding-right: 4px; }
+  #timelineWrap { grid-row: 2; }
+  /* riding (running or paused): 3D view fills the screen, live HUD and timeline float above it,
+     the workout setup panel is hidden. Toggled by main.js via the body class. */
+  body.riding header { position:fixed; top:0; left:0; right:0; z-index:5; background:rgba(255,255,255,.7); border-bottom:none; }
+  body.riding main { position:fixed; inset:0; padding:0; display:block; }
+  body.riding #view { position:absolute; inset:0; height:100%; border:none; border-radius:0; }
+  body.riding .banner { top:64px; }
+  body.riding aside { position:absolute; right:12px; top:64px; bottom:176px; width:460px; overflow-y:auto; scrollbar-gutter:stable; z-index:3; padding:0; }
+  body.riding aside section { background:rgba(255,255,255,.84); backdrop-filter:blur(4px); }
+  body.riding .riding-hide { display:none; }
+  body.riding .metrics { gap:10px; }
+  body.riding .metric { padding:10px 14px; }
+  body.riding .metric .k { font-size:14px; }
+  body.riding .metric .v { font-size:60px; line-height:1.1; }
+  body.riding .metric .u { font-size:18px; }
+  body.riding aside h2 { font-size:14px; }
+  body.riding #workoutSec { display:none; }
+  .flyout { display:none; }
+  body.riding .flyout { display:block; position:absolute; left:12px; bottom:220px; width:max-content; z-index:3; background:rgba(255,255,255,.84); border-radius:8px; padding:12px 14px; }
+  .flyout .fk { font-size:14px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:8px; }
+  .flyout .fv { font-size:60px; line-height:1.1; font-weight:700; font-variant-numeric:tabular-nums; min-width:8ch; white-space:nowrap; }
+  .banner .fv-left { display:block; width:max-content; font-size:60px; line-height:1.1; font-weight:700; font-variant-numeric:tabular-nums; padding:6px 14px; margin-bottom:6px; border-radius:6px; background:rgba(255,255,255,.85); }
+  .banner .fv-left.warmup { color:var(--warm); }
+  .banner .fv-left.work { color:var(--work); }
+  .banner .fv-left.recover { color:var(--recover); }
+  .banner .fv-left.between { color:var(--muted); }
+  .banner .fv-left.cooldown { color:var(--cool); }
+  body.riding #timelineWrap { position:absolute; left:12px; right:12px; bottom:12px; margin:0; z-index:3; background:rgba(255,255,255,.84); }
+  body.riding .viewtools { bottom:176px !important; }
+  @media (max-width: 900px) {
+    body { height: auto; overflow: visible; }
+    main { grid-template-columns: 1fr; grid-template-rows: auto; }
+    #view { height: auto; min-height: 420px; }
+    aside { overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Virtual Row</h1>
+  <span class="pill" id="sensorPill">no sensors</span>
+  <span class="pill" id="statusPill">preview</span>
+  <span style="flex:1"></span>
+  <button id="btnSensors">Sensors</button>
+  <button id="btnStart" class="primary">Start</button>
+  <button id="btnPause" disabled>Pause</button>
+  <button id="btnStop" class="danger" disabled>Stop &amp; save</button>
+</header>
+
+<main>
+  <div id="view">
+    <div id="viewMsg">Loading...</div>
+    <div id="flyout" class="flyout">
+      <div class="fk">Elapsed</div>
+      <div class="fv" id="fElapsed">-</div>
+    </div>
+    <div class="banner">
+      <div class="fv fv-left" id="fLeft">-</div>
+      <div id="phaseName" class="phase none">READY</div>
+      <div><span id="phaseSub" class="sub">Load a workout and press Start</span></div>
+    </div>
+    <span class="pill" id="fps" style="position:absolute;right:10px;top:10px;z-index:2">- fps</span>
+    <div class="viewtools" style="position:absolute;left:10px;bottom:10px;z-index:2;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button id="btnView">Reset view</button>
+      <span class="pill" style="font-size:11px">drag: orbit · right-drag or shift-drag: pan · wheel: zoom · double-click: reset · arrows, +/-, WASD, R reset, C chase cam</span>
+    </div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Live</h2>
+      <div class="metrics">
+        <div class="metric"><div class="k">Power (est.)</div><div class="v" id="tPow">-<span class="u">W</span></div></div>
+        <div class="metric"><div class="k">Heart rate</div><div class="v" id="tHr">-<span class="u">bpm</span></div></div>
+        <div class="metric"><div class="k">Stroke rate</div><div class="v" id="tSpm">-<span class="u">spm</span></div></div>
+        <div class="metric"><div class="k">Split /500 m</div><div class="v" id="tSplit">-</div></div>
+        <div class="metric"><div class="k">Strokes</div><div class="v" id="tStrokes">-</div></div>
+        <div class="metric"><div class="k">Virtual distance</div><div class="v" id="tVDist">-<span class="u">m</span></div></div>
+        <div class="metric riding-hide"><div class="k">Elapsed</div><div class="v" id="tElapsed">-</div></div>
+        <div class="metric riding-hide"><div class="k">Distance per stroke</div><div class="v" id="tDps">-<span class="u">m</span></div></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <span class="muted" id="blockInfo">-</span>
+        <span class="muted" id="nextInfo"></span>
+      </div>
+      <div class="chips" style="margin-top:8px">
+        <span class="pill" id="chipHr">HR -</span>
+        <span class="pill" id="chipSpm">stroke -</span>
+        <span class="pill" id="chipSpd">speed -</span>
+      </div>
+    </section>
+
+    <section id="workoutSec">
+      <h2>Workout</h2>
+      <div class="row" style="margin-bottom:8px">
+        <button id="btnLoad" class="primary">Load workout</button>
+        <span class="muted" id="loadInfo"></span>
+      </div>
+      <div class="row"><label>Preset</label>
+        <select id="wPreset">
+          <option value="">- choose -</option>
+          <option value="quick">Quick test 1-3-20-10</option>
+          <option value="std">Standard 3-13-30-15</option>
+        </select>
+      </div>
+      <div class="row"><label>Blocks</label><input id="wBlocks" type="number" value="3" min="1"></div>
+      <div class="row"><label>Reps per block</label><input id="wReps" type="number" value="13" min="1"></div>
+      <div class="row"><label>Skip last rec.</label><input id="wSkip" type="checkbox" checked></div>
+      <div class="row"><label class="muted" style="min-width:0"><input id="audioOn" type="checkbox" checked> audio cues</label></div>
+      <div class="row"><label class="muted" style="min-width:0"><input id="botsOn" type="checkbox" checked> show dolphins</label></div>
+      <div class="ivtable">
+        <div class="ivhead">Interval</div>
+        <div class="ivhead">Duration (s)</div>
+        <div>Warm-up</div><div><input id="wWarm" type="number" value="600" min="0"></div>
+        <div>Work</div><div><input id="wOn" type="number" value="30" min="1"></div>
+        <div>Recover (short)</div><div><input id="wOff" type="number" value="15" min="0"></div>
+        <div>Rest (long)</div><div><input id="wBetween" type="number" value="300" min="0"></div>
+        <div>Cool-down</div><div><input id="wCool" type="number" value="600" min="0"></div>
+      </div>
+      <details style="margin-top:12px">
+        <summary>Targets (W) per interval</summary>
+        <div class="row"><label>Warm-up</label><input id="tWarm" type="number" step="5" value="90" min="0" max="180"></div>
+        <div class="row"><label>Work</label><input id="tWork" type="number" step="5" value="150" min="0" max="180"></div>
+        <div class="row"><label>Recover</label><input id="tRec" type="number" step="5" value="70" min="0" max="180"></div>
+        <div class="row"><label>Between</label><input id="tBetween" type="number" step="5" value="50" min="0" max="180"></div>
+        <div class="row"><label>Cool-down</label><input id="tCool" type="number" step="5" value="80" min="0" max="180"></div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">Sustained efforts stay at or below 180 W.</p>
+      </details>
+    </section>
+  </aside>
+
+  <div id="timelineWrap" style="grid-column:1/-1">
+    <canvas id="timeline"></canvas>
+    <div class="tl-meta"><span>0:00</span><span id="tlTotal"></span></div>
+  </div>
+</main>
+
+<dialog id="sensorDlg">
+  <h2>Sensors</h2>
+  <div class="row"><b>S4 monitor</b> <span id="s4Pill" class="pill">not connected</span></div>
+  <div class="row">
+    <select id="portSel"><option value="">(scan first)</option></select>
+    <button id="btnPorts">Scan ports</button>
+    <button id="btnS4Connect">Connect</button>
+  </div>
+  <div class="row"><b>Heart rate</b> <span id="hrPill" class="pill">not connected</span></div>
+  <div class="row">
+    <select id="hrSel"><option value="">(scan first)</option></select>
+    <button id="btnHrScan">Scan Bluetooth</button>
+    <button id="btnHrConnect">Connect</button>
+  </div>
+  <div class="row"><span id="sensorMsg" class="pill"></span></div>
+  <div class="row" style="justify-content:flex-end"><button id="btnSensorClose">Close</button></div>
+</dialog>
+
+<script type="module" src="/static/row/main.js"></script>
+</body>
+</html>

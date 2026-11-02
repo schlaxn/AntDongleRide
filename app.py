@@ -21,6 +21,7 @@ from ant.profiles import DEVICE_TYPES
 from ant.session import AntSession
 from ant.usbdev import AntUsbError
 from ride import RideEngine
+from rower.web import bp as rower_bp
 from sensors import SensorRoles, role_status
 from sim import SimulatedRider
 from workout import DEFAULT_GRADIENTS, Workout, parse_shorthand
@@ -31,6 +32,7 @@ CONFIG_PATH = ROOT / "config.json"
 DEFAULT_CONFIG = {"wheel_circumference_m": 2.105, "gradients": dict(DEFAULT_GRADIENTS)}
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+app.register_blueprint(rower_bp)  # WaterRower S4 debug page: /rower-debug
 session = AntSession()
 roles = SensorRoles()
 engine = RideEngine(session, RECORDINGS, roles)

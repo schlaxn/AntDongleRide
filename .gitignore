@@ -14,3 +14,7 @@ __pycache__/
 *.webp
 *.avif
 *.htm
+
+# private rowing measurements and calibration data (personal)
+rower/measurements/
+rower/WaterRower.csv

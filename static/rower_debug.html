@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WaterRower S4 - USB debug</title>
+<style>
+  :root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --line:#d8d8d3; --rx:#0b5cad; --tx:#a04000; --evt:#4b7d2a; --err:#b00020; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#161617; --fg:#ececea; --muted:#9a9a94; --line:#3a3a3d; --rx:#6cb2ff; --tx:#ffa45c; --evt:#8fd16b; --err:#ff6b7a; }
+  }
+  :root[data-theme="dark"] { --bg:#161617; --fg:#ececea; --muted:#9a9a94; --line:#3a3a3d; --rx:#6cb2ff; --tx:#ffa45c; --evt:#8fd16b; --err:#ff6b7a; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .muted { color:var(--muted); }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; }
+  select, input, button { font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+  input[type=text] { flex:1; min-width:180px; font-family:ui-monospace, Consolas, monospace; }
+  button { cursor:pointer; }
+  button.primary { border-color:var(--rx); }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { font-weight:600; }
+  #status.ok { color:var(--evt); } #status.bad { color:var(--err); }
+  #log { font:12px/1.35 ui-monospace, Consolas, monospace; border:1px solid var(--line); border-radius:6px; height:55vh; overflow:auto; padding:6px; white-space:pre-wrap; word-break:break-all; }
+  .rx { color:var(--rx); } .tx { color:var(--tx); } .evt { color:var(--evt); } .err { color:var(--err); }
+  a { color:var(--rx); }
+  @media (max-width: 600px) { body { padding:12px; } #log { height:50vh; } }
+</style>
+</head>
+<body>
+<h1>WaterRower S4 - USB traffic</h1>
+<div class="muted">Raw serial bytes between this laptop and the monitor. Nothing is decoded yet.</div>
+
+<div class="row">
+  <label>Port <select id="port"><option value="">(scan first)</option></select></label>
+  <button id="scan">Scan ports</button>
+  <label>Baud <select id="baud">
+    <option>115200</option><option>9600</option><option>19200</option><option>38400</option><option>57600</option>
+  </select></label>
+  <button id="connect" class="primary">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <span id="status" class="bad">Disconnected</span>
+</div>
+
+<div class="row">
+  <select id="mode">
+    <option value="ascii">ASCII (\r \n escapes)</option>
+    <option value="hex">Hex bytes</option>
+  </select>
+  <input id="payload" type="text" placeholder="e.g. USB\r\n  or  55 53 42 0d 0a" autocomplete="off">
+  <button id="send" disabled>Send</button>
+  <button id="handshake" disabled title="Guess from community code (waterrower-core): sends USB followed by CRLF">Send USB handshake (guess)</button>
+</div>
+
+<div class="row">
+  <label><input type="checkbox" id="pause"> Pause display</label>
+  <button id="clear">Clear log</button>
+  <button id="save" disabled>Save capture</button>
+  <a href="/api/rower/export.csv">Download CSV</a>
+  <span id="saved" class="muted"></span>
+</div>
+
+<div id="log" aria-live="off"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const MAX_ROWS = 2000;
+  const logEl = $("log");
+  let es = null;
+
+  function setStatus(text, ok) {
+    const s = $("status");
+    s.textContent = text;
+    s.className = ok ? "ok" : "bad";
+  }
+
+  function setConnected(connected) {
+    $("connect").disabled = connected;
+    $("disconnect").disabled = !connected;
+    $("send").disabled = !connected;
+    $("handshake").disabled = !connected;
+    $("save").disabled = !connected;
+  }
+
+  function addRow(cls, text) {
+    if ($("pause").checked) return;
+    const div = document.createElement("div");
+    div.className = cls;
+    div.textContent = text;
+    logEl.appendChild(div);
+    while (logEl.childNodes.length > MAX_ROWS) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function stamp(ts) {
+    const d = new Date(ts * 1000);
+    const p = (n, w = 2) => String(n).padStart(w, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+  }
+
+  function onItem(item) {
+    const t = stamp(item.ts);
+    if (item.dir === "EVT") {
+      addRow("evt", `${t} --- ${item.text}`);
+    } else if (item.dir === "TX") {
+      addRow("tx", `${t} TX [${item.len}] ${item.raw_hex}   ${item.text}`);
+    } else {
+      addRow("rx", `${t} RX [${item.len}] ${item.raw_hex}   ${item.text}`);
+      for (const line of item.lines || []) addRow("rx", `${t}    line: ${line}`);
+    }
+  }
+
+  function openStream() {
+    if (es) return;
+    es = new EventSource("/api/rower/stream");
+    es.onmessage = (e) => {
+      try { onItem(JSON.parse(e.data)); } catch (err) { /* ignore malformed frame */ }
+    };
+    es.onerror = () => { /* EventSource retries on its own */ };
+  }
+
+  async function api(method, url, body) {
+    const opt = { method, headers: {} };
+    if (body !== undefined) {
+      opt.headers["Content-Type"] = "application/json";
+      opt.body = JSON.stringify(body);
+    }
+    const r = await fetch(url, opt);
+    let data = {};
+    try { data = await r.json(); } catch (e) { /* non-JSON */ }
+    if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+    return data;
+  }
+
+  async function scan() {
+    try {
+      const data = await api("GET", "/api/rower/ports");
+      const sel = $("port");
+      const prev = sel.value;
+      sel.innerHTML = "";
+      if (!data.ports.length) {
+        sel.innerHTML = '<option value="">(no serial ports found)</option>';
+      }
+      for (const p of data.ports) {
+        const o = document.createElement("option");
+        o.value = p.device;
+        const ids = p.vid ? ` [${p.vid}:${p.pid}]` : "";
+        o.textContent = `${p.device} - ${p.description}${ids}`;
+        sel.appendChild(o);
+      }
+      if (prev) sel.value = prev;
+      addRow("evt", `${stamp(Date.now() / 1000)} --- found ${data.ports.length} port(s)`);
+      for (const p of data.ports) {
+        addRow("evt", `    ${p.device}: ${p.description} vid=${p.vid} pid=${p.pid} mfr=${p.manufacturer} hwid=${p.hwid}`);
+      }
+    } catch (err) {
+      setStatus(err.message, false);
+    }
+  }
+
+  async function refreshStatus() {
+    try {
+      const s = await api("GET", "/api/rower/status");
+      setConnected(s.connected);
+      setStatus(s.connected ? `Connected: ${s.port} @ ${s.baud}` : "Disconnected", s.connected);
+    } catch (err) {
+      setStatus("Server not reachable", false);
+    }
+  }
+
+  $("scan").onclick = scan;
+
+  $("connect").onclick = async () => {
+    const port = $("port").value;
+    if (!port) { setStatus("Pick a port first (Scan ports)", false); return; }
+    try {
+      const s = await api("POST", "/api/rower/connect", { port, baud: Number($("baud").value) });
+      setConnected(true);
+      setStatus(`Connected: ${s.port} @ ${s.baud}`, true);
+      openStream();
+    } catch (err) {
+      setStatus(err.message, false);
+    }
+  };
+
+  $("disconnect").onclick = async () => {
+    try { await api("POST", "/api/rower/disconnect"); } catch (err) { /* show below */ }
+    setConnected(false);
+    setStatus("Disconnected", false);
+  };
+
+  async function send(text, mode) {
+    try {
+      await api("POST", "/api/rower/send", { text, mode });
+    } catch (err) {
+      setStatus(err.message, false);
+    }
+  }
+
+  $("send").onclick = () => send($("payload").value, $("mode").value);
+  $("payload").addEventListener("keydown", (e) => { if (e.key === "Enter") $("send").click(); });
+  $("handshake").onclick = () => send("USB\\r\\n", "ascii");
+
+  $("clear").onclick = async () => {
+    logEl.innerHTML = "";
+    try { await api("POST", "/api/rower/clear"); } catch (err) { /* ignore */ }
+  };
+
+  $("save").onclick = async () => {
+    try {
+      const d = await api("POST", "/api/rower/save");
+      $("saved").textContent = `Saved ${d.items} items to ${d.folder}`;
+    } catch (err) {
+      $("saved").textContent = err.message;
+    }
+  };
+
+  scan();
+  refreshStatus().then(() => {
+    if (!es && $("disconnect").disabled === false) openStream();
+  });
+})();
+</script>
+</body>
+</html>
