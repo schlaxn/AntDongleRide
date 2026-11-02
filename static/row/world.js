@@ -1018,7 +1018,7 @@ export function createRowWorld(container, onFps) {
       // (flat when in the water, edge-on when lifted), never a full turn
       // in the water: blade vertical, facing the direction of travel (maximum drag);
       // lifted clear: blade flat (minimum drag)
-      const feather = (1 - Math.min(1, Math.max(0, (tip.y + 0.11) / 0.4))) * (Math.PI / 2);
+      const feather = Math.min(1, Math.max(0, (tip.y + 0.11) / 0.4)) * (Math.PI / 2);   // 0 in the water (blade vertical), 90 degrees above (blade flat)
       // the blade's long axis lies exactly on the shaft (full 3D direction), so the angle between
       // oar and blade stays fixed; the feathering turns the blade about that axis
       const dirS = new THREE.Vector3().subVectors(tip, handP).normalize();
