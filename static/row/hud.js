@@ -17,10 +17,11 @@ export function fmtClock(s) {
   return h ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`;
 }
 
+// split per 500 m, in whole seconds: m:ss
 export function fmtSplit(s) {
   if (s == null || !isFinite(s)) return "-";
-  const t = Math.round(s * 10) / 10;
-  const m = Math.floor(t / 60), sec = (t - m * 60).toFixed(1).padStart(4, "0");
+  const t = Math.round(s);
+  const m = Math.floor(t / 60), sec = String(t - m * 60).padStart(2, "0");
   return `${m}:${sec}`;
 }
 
@@ -57,8 +58,7 @@ export function renderSnapshot(s) {
   setVal("tHr", s.hr_bpm == null ? null : Math.round(s.hr_bpm));
   setVal("tSpm", s.stroke_rate_spm == null ? null : Math.round(s.stroke_rate_spm));
   setVal("tSplit", fmtSplit(s.split_s));
-  setVal("tVSpeed", s.virtual_speed_ms == null ? null : s.virtual_speed_ms.toFixed(2));
-  setVal("tVDist", s.virtual_distance_m == null ? null : Math.round(s.virtual_distance_m));
+  setVal("tVDist", s.distance_m == null ? null : Math.round(s.distance_m));   // measured distance
   setVal("tElapsed", fmtClock(s.elapsed_s));
   setVal("tTgt", s.target_w);
   setVal("tDps", s.distance_per_stroke_m == null ? null : s.distance_per_stroke_m.toFixed(1));

@@ -72,8 +72,8 @@ class RowStateTests(unittest.TestCase):
         snap = st.snapshot(time.time())
         for key in ("type", "status", "elapsed_s", "total_s", "phase", "phase_left_s",
                     "next_phase", "speed_ms", "split_s", "power_w", "avg_power_w",
-                    "stroke_rate_spm", "strokes", "distance_m", "virtual_speed_ms",
-                    "virtual_distance_m", "hr_bpm", "target_w", "bots", "bot_counts"):
+                    "stroke_rate_spm", "strokes", "distance_m", "hr_bpm", "target_w",
+                    "bots", "bot_counts"):
             self.assertIn(key, snap)
         self.assertEqual(snap["type"], "row")
         self.assertEqual(snap["status"], "preview")
@@ -81,6 +81,29 @@ class RowStateTests(unittest.TestCase):
         snap = st.snapshot(time.time())
         self.assertEqual(snap["phase"], "warmup")
         self.assertEqual(snap["target_w"], st.targets["warmup"])
+
+    def test_step_detector_follows_a_jump_and_keeps_steady_stretches_smooth(self):
+        st = RowState(short_workout())
+        # steady, with a little noise: the display stays at the average
+        for i in range(250):
+            t = i * 0.1
+            st.update("speed", t, 4.0 + (0.1 if i % 2 else -0.1))
+        steady = st.snapshot(24.9)["speed_ms"]
+        self.assertAlmostEqual(steady, 4.0, delta=0.05)
+        # a deliberate step to 5 m/s: the display follows within about 2.5 seconds
+        # (the engine publishes 5 times a second, so the detector is run at that rate here)
+        for i in range(250, 300):
+            t = i * 0.1
+            st.update("speed", t, 5.0)
+            if i % 2 == 1:
+                st.snapshot(t)
+        self.assertGreater(st.snapshot(29.9)["speed_ms"], 4.9)
+        # once the new effort has settled, the display returns to the slow average
+        for i in range(300, 500):
+            st.update("speed", i * 0.1, 5.0)
+            if i % 2 == 1:
+                st.snapshot(i * 0.1)
+        self.assertAlmostEqual(st.snapshot(49.9)["speed_ms"], 5.0, delta=0.05)
 
     def test_split_from_speed(self):
         st = RowState(short_workout())

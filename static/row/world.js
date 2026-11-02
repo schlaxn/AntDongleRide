@@ -5,7 +5,8 @@ import * as THREE from "/static/vendor/three.module.min.js";
 
 const HALF_W = 14;          // river half-width (m)
 const BANK_W = 70;          // bank width beyond the river (m)
-const D_BACK = 60;          // scenery kept behind the boat (m)
+const BANK_Y = 1.05;        // height of the bank top above the water (1 m above the river level)
+const D_BACK = 500;         // scenery kept behind the boat (m): the river runs 500 m before the start
 const D_AHEAD = 340;        // scenery kept ahead of the boat (m)
 const ROW_STEP = 1;         // metres between river rows
 const CENTRE_LEN = 20000;   // metres of centreline precomputed
@@ -26,34 +27,38 @@ const smoothstep = (x) => { const t = Math.min(1, Math.max(0, x)); return t * t 
 // ---------- the river centreline ----------
 // Heading (radians, 0 = straight away from the boat). Straights and corners alternate;
 // each corner is a smooth turn of CORNER_M metres between two straights.
-const NODE_H = [];
-for (let k = 0; k < Math.ceil(CENTRE_LEN / NODE_EVERY) + 2; k++) {
+// heading at each node, from the node number alone: the river never runs out
+const nodeH = (k) => {
+  if (k === 0) return 0;                          // the river is straight through the start line
   const sign = hash(k + 900) < 0.5 ? -1 : 1;
-  NODE_H[k] = sign * (0.35 + hash(k + 910) * 0.6) * (hash(k + 920) < 0.25 ? 0 : 1);
-}
+  return sign * (0.35 + hash(k + 910) * 0.6) * (hash(k + 920) < 0.25 ? 0 : 1);
+};
 function headingAt(a) {
   const k = Math.floor(a / NODE_EVERY);
   const within = a - k * NODE_EVERY;
-  const h0 = NODE_H[k], h1 = NODE_H[k + 1];
+  const h0 = nodeH(k), h1 = nodeH(k + 1);
   const start = NODE_EVERY - CORNER_M;
   if (within <= start) return h0;
   return h0 + (h1 - h0) * smoothstep((within - start) / CORNER_M);
 }
 // Centreline in absolute coordinates, forward = (sin h, -cos h), one point per metre.
-const CX = new Float64Array(CENTRE_LEN + 1);
-const CZ = new Float64Array(CENTRE_LEN + 1);
-{
-  let x = 0, z = 0;
-  for (let a = 0; a <= CENTRE_LEN; a++) {
-    CX[a] = x; CZ[a] = z;
+// the centreline, one point per metre, grown as the boat travels further (no end)
+const CX = [0];
+const CZ = [0];
+function ensureCentre(n) {
+  while (CX.length <= n) {
+    const a = CX.length - 1;
     const h = headingAt(a);
-    x += Math.sin(h); z += -Math.cos(h);
+    CX.push(CX[a] + Math.sin(h));
+    CZ.push(CZ[a] - Math.cos(h));
   }
 }
-const clampA = (a) => Math.min(CENTRE_LEN - 1, Math.max(0, a));
 // Absolute point at distance a, interpolated, and the river's normal and heading there.
 function centreAt(a) {
-  const c = clampA(a), i = Math.floor(c), f = c - i;
+  // before the start the river runs straight on, behind the start line
+  if (a < 0) return { x: 0, z: -a, h: 0 };
+  const c = a, i = Math.floor(c), f = c - i;
+  ensureCentre(i + 2);
   // heading is taken at the exact distance, not at the whole metre, so bends turn smoothly
   return { x: CX[i] + (CX[i + 1] - CX[i]) * f, z: CZ[i] + (CZ[i + 1] - CZ[i]) * f, h: headingAt(c) };
 }
@@ -162,8 +167,8 @@ export function createRowWorld(container, onFps) {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(COLORS.sky);
-  scene.fog = new THREE.Fog(COLORS.sky, 140, 460);
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1200);
+  scene.fog = new THREE.Fog(COLORS.sky, 220, 900);   // far enough out that the land reaches the mountains
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.3, 1200);   // a larger near plane: sharper depth for distant water
   // sunlight from the upper left, casting shadows around the boat (the scene is rider-relative,
   // so the shadow box stays centred on the scull)
   const sun = new THREE.DirectionalLight(0xfff1d6, 1.6);
@@ -191,13 +196,14 @@ export function createRowWorld(container, onFps) {
   river.receiveShadow = true;
   scene.add(river);
 
-  const bankPos = new Float32Array(ROWS * 4 * 3);
+  // per row and side: [water's edge, top of the 45-degree slope, outer edge of the flat bank]
+  const bankPos = new Float32Array(ROWS * 6 * 3);
   const bankIdx = [];
   for (let r = 0; r < ROWS - 1; r++) {
     for (const side of [0, 1]) {
-      const o = r * 4 + side * 2;             // [inner, outer] per side, per row
-      const i0 = o, i1 = o + 1, i2 = o + 4, i3 = o + 5;
-      bankIdx.push(i0, i1, i2, i1, i3, i2);
+      const o = r * 6 + side * 3, n = o + 6;
+      bankIdx.push(o, o + 1, n, o + 1, n + 1, n);                   // the slope
+      bankIdx.push(o + 1, o + 2, n + 1, o + 2, n + 2, n + 1);       // the flat top
     }
   }
   const bankGeo = new THREE.BufferGeometry();
@@ -207,6 +213,13 @@ export function createRowWorld(container, onFps) {
   banks.frustumCulled = false;
   banks.receiveShadow = true;
   scene.add(banks);
+
+  // the land beyond the banks, running to the horizon (below the river and bank ribbons)
+  const landGeo = new THREE.PlaneGeometry(3000, 3000);
+  landGeo.rotateX(-Math.PI / 2);
+  const land = new THREE.Mesh(landGeo, lam(COLORS.bank, { side: THREE.DoubleSide }));
+  land.position.set(0, -0.05, -900);
+  scene.add(land);
 
   // ---------- trees ----------
   const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 2.4, 12), lam(COLORS.trunk), TREE_MAX);
@@ -304,7 +317,7 @@ export function createRowWorld(container, onFps) {
     }
     scene.add(g);
     balloons.push({ g, d: 260 + i * 210 + hash(i + 400) * 80, lat: (i % 2 ? 1 : -1) * (30 + hash(i + 410) * 60),
-      y: 60 + hash(i + 420) * 50, phase: hash(i + 430) * 6 });
+      y: 20 + hash(i + 420) * 10, phase: hash(i + 430) * 6 });   // low over the river
   }
 
   const envMats = COLORS.envelope.map((c) => lam(c, { flatShading: true }));
@@ -325,7 +338,7 @@ export function createRowWorld(container, onFps) {
     g.add(gondola);
     scene.add(g);
     airships.push({ g, d: 400 + i * 420 + hash(i + 600) * 120, lat: (i % 2 ? 1 : -1) * (40 + hash(i + 610) * 60),
-      y: 45 + hash(i + 620) * 18, phase: hash(i + 630) * 6 });
+      y: 28 + hash(i + 620) * 8, phase: hash(i + 630) * 6 });    // low over the river
   }
 
   // ---------- dolphins: the other riders, swimming and leaping alongside the river ----------
@@ -371,7 +384,7 @@ export function createRowWorld(container, onFps) {
   const REED_MAX = 160;
   const reeds = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.05, 1.6, 8), lam(COLORS.reed), REED_MAX);
   reeds.frustumCulled = false;
-  scene.add(reeds);
+  // the reeds (thin upright stakes along the bank) are no longer drawn
 
   // A boathouse: timber building with a gabled roof, an open boat bay facing the river,
   // windows, a wooden jetty and a boat on a rack. The long side runs along the river.
@@ -432,12 +445,12 @@ export function createRowWorld(container, onFps) {
     // wooden jetty out to the water, on posts
     for (const z of [-1.4, 1.4]) {
       const plank = new THREE.Mesh(new THREE.BoxGeometry(6.5, 0.16, 1.1), lam(0x9b7a52));
-      plank.position.set(6.6, 0.6, z);
+      plank.position.set(6.6, -0.45, z);   // the jetty is at water level (the boathouse stands on the bank)
       g.add(plank);
     }
     for (let k = 0; k < 3; k++) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.4, 10), timber);
-      post.position.set(5 + k * 2.2, -0.1, -1.6);
+      post.position.set(5 + k * 2.2, -1.15, -1.6);
       g.add(post);
       const post2 = post.clone();
       post2.position.z = 1.6;
@@ -599,6 +612,7 @@ export function createRowWorld(container, onFps) {
   ], 3));
   const wake = new THREE.Mesh(wakeGeo, new THREE.MeshBasicMaterial({ color: COLORS.wake, transparent: true, opacity: 0.55, depthWrite: false }));
   scene.add(wake);   // the boat sits at the origin, so the wake goes straight into the scene
+  wake.position.y = 0.07;   // clear of the river surface (0.05): no depth fighting
 
   function placeExtras(dNow, t) {
     for (const c of clouds) {
@@ -623,13 +637,30 @@ export function createRowWorld(container, onFps) {
     for (let i = ri; i < REED_MAX; i++) reeds.setMatrixAt(i, hidden());
     reeds.instanceMatrix.needsUpdate = true;
 
+    // distance markers: every 100 m along the left bank, the bold ones every 500 m
+    {
+      const kFrom = Math.floor((dNow - D_BACK) / 100), kTo = Math.floor((dNow + D_AHEAD) / 100);
+      let mi = 0;
+      for (let k = kFrom; k <= kTo && mi < markerPool.length; k++) {
+        const d = k * 100;
+        if (d <= 0) continue;
+        const m = markerPool[mi++];
+        setMarkerLabel(m, d);
+        const [x, z] = riverPoint(d, MARK_LAT, dNow);
+        m.g.position.set(x, BANK_Y, z);
+        const [x2, z2] = riverPoint(d + 1, MARK_LAT, dNow);
+        m.g.rotation.y = -Math.atan2(x2 - x, z2 - z);
+        m.g.visible = true;
+      }
+      for (let i = mi; i < markerPool.length; i++) markerPool[i].g.visible = false;
+    }
     // the lawn strips along the bank, before and after the pool
     for (const s of lawnStrips) {
       const rel = wrapRel(s.d, dNow, D_BACK, 100000);
       s.g.visible = rel >= -D_BACK - s.len / 2 && rel <= D_AHEAD;
       if (s.g.visible) {
         const [x, z] = riverPoint(dNow + rel, LAWN_LAT, dNow);
-        s.g.position.set(x, 0, z);
+        s.g.position.set(x, BANK_Y, z);
         const [x2, z2] = riverPoint(dNow + rel + 1, LAWN_LAT, dNow);
         s.g.rotation.y = -Math.atan2(x2 - x, z2 - z);
       }
@@ -640,7 +671,7 @@ export function createRowWorld(container, onFps) {
       swimmingPool.g.visible = rel >= -D_BACK && rel <= D_AHEAD + 40;
       if (swimmingPool.g.visible) {
         const [x, z] = riverPoint(dNow + rel, swimmingPool.lat, dNow);
-        swimmingPool.g.position.set(x, 0, z);
+        swimmingPool.g.position.set(x, BANK_Y, z);
         const [x2, z2] = riverPoint(dNow + rel + 1, swimmingPool.lat, dNow);
         swimmingPool.g.rotation.y = -Math.atan2(x2 - x, z2 - z);
       }
@@ -650,9 +681,9 @@ export function createRowWorld(container, onFps) {
       bh.g.visible = rel >= -D_BACK && rel <= D_AHEAD;
       if (bh.g.visible) {
         const [x, z] = riverPoint(dNow + rel, bh.lat, dNow);
-        bh.g.position.set(x, 0, z);
+        bh.g.position.set(x, BANK_Y, z);
         const [x2, z2] = riverPoint(dNow + rel + 1, bh.lat, dNow);
-        bh.g.rotation.y = -Math.atan2(x2 - x, z2 - z);
+        bh.g.rotation.y = -Math.atan2(x2 - x, z2 - z) + Math.PI;   // the bay faces the river
       }
     }
     for (const sw of swans) {
@@ -665,6 +696,65 @@ export function createRowWorld(container, onFps) {
         sw.g.rotation.y = -Math.atan2(x2 - x, z2 - z);
       }
     }
+  }
+
+  // distance markers on the left bank: a flag every 100 m, a bold one every 500 m.
+  // Drawn from a small pool and moved along the river as the boat travels.
+  const MARK_LAT = -(HALF_W + 1.5);
+  function makeMarker() {
+    const g = new THREE.Group();
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1, 6), lam(0xffffff));
+    g.add(pole);
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 128;
+    const tex = new THREE.CanvasTexture(canvas);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.55),
+      new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }));
+    g.add(flag);
+    g.visible = false;
+    scene.add(g);
+    return { g, pole, flag, canvas, tex, label: null };
+  }
+  function setMarkerLabel(m, d) {
+    if (m.label === d) return;
+    m.label = d;
+    const bold = d % 500 === 0;
+    const ctx = m.canvas.getContext("2d");
+    ctx.fillStyle = bold ? "#c2410c" : "#ffffff";
+    ctx.fillRect(0, 0, 256, 128);
+    ctx.strokeStyle = "#16232b";
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, 250, 122);
+    ctx.fillStyle = bold ? "#ffffff" : "#16232b";
+    ctx.font = (bold ? "bold 64px" : "bold 46px") + " system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${d} m`, 128, 64);
+    m.tex.needsUpdate = true;
+    const h = bold ? 2.6 : 1.8;                       // bold markers are taller
+    const fs = bold ? 1.0 : 0.66;                     // and their flags are larger
+    m.pole.scale.set(1, h, 1);
+    m.pole.position.y = h / 2;
+    m.flag.geometry.dispose();
+    m.flag.geometry = new THREE.PlaneGeometry(1.1 * fs, 0.55 * fs);
+    m.flag.position.set(0.55 * fs, h - 0.3 * fs, 0);
+  }
+  const markerPool = [];
+  for (let i = 0; i < 12; i++) markerPool.push(makeMarker());
+
+  // mountains in the far background, built once and never moved (as in the ride world)
+  const mountainMat = lam(0x6b7f6a, { flatShading: true });
+  const snowMat = lam(0xf4f7fa, { flatShading: true });
+  for (let i = 0; i < 30; i++) {
+    const h = 60 + hash(i + 1200) * 110;
+    const r = 60 + hash(i + 1210) * 70;
+    const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 14), mountainMat);
+    m.position.set((hash(i + 1220) - 0.5) * 900, h / 2, -330 - hash(i + 1230) * 130);
+    scene.add(m);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(r * 0.35, h * 0.3, 14), snowMat);
+    cap.position.set(m.position.x, h * 0.85, m.position.z);
+    scene.add(cap);
   }
 
   // ---------- the scull and its rower ----------
@@ -752,6 +842,14 @@ export function createRowWorld(container, onFps) {
   const hair = new THREE.Mesh(new THREE.SphereGeometry(0.135, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.5), lam(COLORS.blondeHair));
   hair.position.set(0, 0.715, -0.02);
   hair.scale.set(0.85, 1.05, 0.95);
+  // a white cap over the hair, with a short brim at the front
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.142, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.5), lam(0xffffff));
+  cap.position.copy(hair.position);
+  cap.scale.copy(hair.scale);
+  torsoPivot.add(cap);
+  const brim = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.015, 0.1), lam(0xffffff));
+  brim.position.set(0, hair.position.y + 0.02, hair.position.z - 0.13);   // the upper body is turned 180 degrees, so the front is -z here
+  torsoPivot.add(brim);
   torsoPivot.add(hair);
 
   const sculls = [];
@@ -813,15 +911,18 @@ export function createRowWorld(container, onFps) {
       const a = dNow + rel;
       const [lx, lz] = riverPoint(a, -HALF_W, dNow);
       const [rx, rz] = riverPoint(a, HALF_W, dNow);
-      riverPos[r * 6 + 0] = lx; riverPos[r * 6 + 1] = 0.02; riverPos[r * 6 + 2] = lz;
-      riverPos[r * 6 + 3] = rx; riverPos[r * 6 + 4] = 0.02; riverPos[r * 6 + 5] = rz;
+      riverPos[r * 6 + 0] = lx; riverPos[r * 6 + 1] = 0.05; riverPos[r * 6 + 2] = lz;
+      riverPos[r * 6 + 3] = rx; riverPos[r * 6 + 4] = 0.05; riverPos[r * 6 + 5] = rz;
       for (const side of [0, 1]) {
         const lat0 = side === 0 ? -HALF_W : HALF_W;
-        const [ix, iz] = riverPoint(a, lat0, dNow);
-        const [ox, oz] = riverPoint(a, lat0 + Math.sign(lat0) * BANK_W, dNow);
-        const o = (r * 2 + side) * 6;
-        bankPos[o + 0] = ix; bankPos[o + 1] = 0.01; bankPos[o + 2] = iz;
-        bankPos[o + 3] = ox; bankPos[o + 4] = 0.01; bankPos[o + 5] = oz;
+        const sg = Math.sign(lat0);
+        const [ex, ez] = riverPoint(a, lat0, dNow);                 // the water's edge
+        const [tx, tz] = riverPoint(a, lat0 + sg * 1.0, dNow);      // top of the 45-degree slope (1 m out, 1 m up)
+        const [ox, oz] = riverPoint(a, lat0 + sg * BANK_W, dNow);   // the flat bank top
+        const o = (r * 2 + side) * 9;
+        bankPos[o + 0] = ex; bankPos[o + 1] = 0.05; bankPos[o + 2] = ez;
+        bankPos[o + 3] = tx; bankPos[o + 4] = BANK_Y; bankPos[o + 5] = tz;
+        bankPos[o + 6] = ox; bankPos[o + 7] = BANK_Y; bankPos[o + 8] = oz;
       }
     }
     riverGeo.attributes.position.needsUpdate = true;
@@ -846,13 +947,13 @@ export function createRowWorld(container, onFps) {
         const [x, z] = riverPoint(dAbs, lat, dNow);
         const s = 0.8 + hash(seed * 3 + 4) * 0.9;
         const pine = hash(seed * 7 + 5) < 0.55;
-        dummy.position.set(x, 1.2 * s, z); dummy.scale.setScalar(s); dummy.updateMatrix();
+        dummy.position.set(x, BANK_Y + 1.2 * s, z); dummy.scale.setScalar(s); dummy.updateMatrix();
         trunks.setMatrixAt(ti, dummy.matrix);
         if (pine) {
-          dummy.position.set(x, 4.5 * s, z); dummy.updateMatrix();
+          dummy.position.set(x, BANK_Y + 4.5 * s, z); dummy.updateMatrix();
           pines.setMatrixAt(ti, dummy.matrix); broads.setMatrixAt(ti, hidden());
         } else {
-          dummy.position.set(x, 3.6 * s, z); dummy.updateMatrix();
+          dummy.position.set(x, BANK_Y + 3.6 * s, z); dummy.updateMatrix();
           broads.setMatrixAt(ti, dummy.matrix); pines.setMatrixAt(ti, hidden());
         }
         ti++;
@@ -976,9 +1077,16 @@ export function createRowWorld(container, onFps) {
     const seatZ = drive ? SEAT_CATCH + travel * smoothstep(p / DRIVE)
                         : SEAT_FINISH - travel * smoothstep((p - DRIVE) / (1 - DRIVE));
     const reach = (seatZ - SEAT_CATCH) / travel;      // 0 at the catch, 1 at the finish
+    // the arms follow the legs: their phase is delayed by 8% of the stroke
+    const ARM_DELAY = 0.08;
+    const pa = (p - ARM_DELAY + 1) % 1;
+    const seatA = pa < DRIVE
+      ? SEAT_CATCH + travel * smoothstep(pa / DRIVE)
+      : SEAT_FINISH - travel * smoothstep((pa - DRIVE) / (1 - DRIVE));
+    const armReach = (seatA - SEAT_CATCH) / travel;
     // knees bent (catch): lean forward to the stern; knees straight (finish): lean back towards the bow
     // catch: upper body at 0 degrees (upright); finish: about 20 degrees back towards the bow
-    const lean = -0.7 * reach;                          // back bent 40 degrees from vertical at the finish
+    const lean = -0.52 * reach;                         // back about 30 degrees from vertical at the finish (10 cm less forward)
 
     rower.position.set(0, 0.2, seatZ);
     seat.position.set(0, 0.03, 0);
@@ -991,12 +1099,12 @@ export function createRowWorld(container, onFps) {
     // knees bent (catch): arms straight out in front of the rower, towards the stern;
     // knees straight (finish): hands in front of the breast
     // hands are placed from the shoulders: arms fully extended at the catch, breast at the finish
-    const handZ = shoulderZ + 0.5 - 0.25 * reach, handY = 0.55 + 0.15 * reach;
+    const handZ = shoulderZ + 0.5 - 0.25 * armReach, handY = 0.55 + 0.15 * armReach;
     // hand spread through the stroke: wide at the catch and the finish, close in the middle of
     // the drive and of the recovery. Seen from above the hands trace a figure eight.
-    const handSpread = p < DRIVE
-      ? 0.5 + 0.5 * Math.cos(2 * Math.PI * p / (2 * 0.3))
-      : 0.5 + 0.5 * Math.cos(2 * Math.PI * (p - DRIVE) / 0.4);   // reaching forward at the catch, to the chest at the finish
+    const handSpread = pa < DRIVE
+      ? 0.5 + 0.5 * Math.cos(2 * Math.PI * pa / (2 * 0.3))
+      : 0.5 + 0.5 * Math.cos(2 * Math.PI * (pa - DRIVE) / 0.4);   // reaching forward at the catch, to the chest at the finish
     for (const s of sculls) {
       const sx = s.side;
       const shoulderP = new THREE.Vector3(sx * 0.18, shoulderY, shoulderZ);   // shoulder joints about 0.38 m apart
@@ -1012,7 +1120,7 @@ export function createRowWorld(container, onFps) {
       const knee = kneeFrom(hip, foot);
       beam(s.thigh, hip, knee);
       beam(s.shin, knee, foot);
-      const tip = oarTip(sx, p, reach);
+      const tip = oarTip(sx, pa, armReach);   // the blades follow the arms
       beam(s.shaft, handP, tip);
       // blade: yaw follows the shaft; feathering is a single 90 degree tilt about the shaft
       // (flat when in the water, edge-on when lifted), never a full turn
@@ -1032,7 +1140,7 @@ export function createRowWorld(container, onFps) {
       const inWater = tip.y < -0.05;
       s.ripple.visible = inWater;
       if (inWater) {
-        s.ripple.position.set(tip.x, 0.02, tip.z);
+        s.ripple.position.set(tip.x, 0.08, tip.z);   // on the river surface (0.05), clear of it
         s.ripple.scale.setScalar(0.7 + 0.6 * Math.sin(Math.min(1, p / DRIVE) * Math.PI / 2));
         s.ripple.material.opacity = 0.5 * (1 - Math.max(0, (tip.y + 0.11) / 0.4));
       }
@@ -1142,9 +1250,10 @@ export function createRowWorld(container, onFps) {
     if (atStart) {
       dispD = 0;                                    // held at the start position during the countdown
     } else if (snap) {
-      const v = snap.virtual_speed_ms || 0;
+      // the view moves with the measured speed and follows the measured distance
+      const v = snap.speed_ms || 0;
       dispD += v * dt * (1 + surge(strokePhase(performance.now())));
-      if (snap.status === "running") dispD += ((snap.virtual_distance_m || 0) - dispD) * (1 - Math.exp(-dt * 4));
+      if (snap.status === "running") dispD += ((snap.distance_m || 0) - dispD) * (1 - Math.exp(-dt * 4));
     }
     rebuildRiver(dispD);
     placeScenery(dispD);

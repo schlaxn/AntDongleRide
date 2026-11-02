@@ -68,11 +68,25 @@ The 19 L factor is about **1.11** on the three runs kept. The 149 W run was drop
 
 ## 5. Current formulas
 
-Implemented in `rower/profiles.py`:
+Implemented in `rower/profiles.py` (the speed is the primary measurement, see section 5a):
 
-- `W = WATTS_PER_CODE3 × code³`, with `WATTS_PER_CODE3 = 0.143`. This is an empirical fudge factor, not a physical law. It is calibrated for the 17 L setting. At 19 L multiply by about 1.11.
-- `v = (W / WATT_CONST)^(1/3)`, with `WATT_CONST = 1.78`. This is the user's own cube law at 17.0 L. It is only used for the speed and split display.
-- `split = 500 / v` seconds.
+- `v [m/s] = code / CODE_PER_MS`, with `CODE_PER_MS = 2.326`. This is the empirical scale from the 17 L monitor readings, not a physical unit.
+- `W = WATT_CONST × v³`, with `WATT_CONST = 1.78`. This is the user's cube law at 17.0 L. Power is derived from the speed.
+- At 19 L the displayed power is multiplied by `FILL_POWER_FACTOR[19] = 1.07`. The speed is not affected.
+- `split = 500 / v` seconds, shown in whole seconds.
+
+## 5a. Architecture: measured versus derived
+
+For rowing the speed is the primary measurement. The paddle moves the flywheel in the water tank, and the monitor reports how fast it goes. Power is not measured. It is derived from the speed with the cube law. The app therefore does the following:
+
+- **Motion, distance and split** follow the measured speed. The view moves with it, and the distance is the running total of the measured speed, so it matches the monitor's distance.
+- **Power** is derived from the speed: `W = 1.78 × v³`. The display averages it over a window (see the smoothing below).
+- **The virtual boat** (`BoatPhysics`) is not used for the rower. The real tank already gives the real inertia and acceleration, so a second, modelled boat would only add error. The rower's virtual distance and speed were removed for that reason.
+- **Other boats** (the dolphins) still use `BoatPhysics` for their own motion, since they have no measured speed.
+
+For biking the split is the opposite. Power is the primary measurement, from the static dyno (or a direct power meter), and the speed is virtual: it is calculated from that power and the gradients, the rider's mass and the drag. The rowing and biking apps therefore differ in which quantity is measured and which is derived, which is why the rowing app does not reuse the bike's virtual speed model.
+
+The displayed speed, split and power are smoothed. Steady efforts show a 10-second average. A deliberate change (more than 10% for 1.5 s) shows the 2-second average instead, so intervals appear within about 2–3 seconds (`display()` in `rower/engine.py`). The physics and the distance use the raw values.
 
 ## 6. Open questions
 

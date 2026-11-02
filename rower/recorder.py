@@ -12,7 +12,7 @@ from pathlib import Path
 ROW_COLUMNS = [
     "elapsed_s", "iso_time", "phase", "block", "rep", "hr_bpm", "stroke_rate_spm",
     "speed_ms", "split_s", "power_w", "avg_power_w", "strokes", "distance_m",
-    "virtual_speed_ms", "virtual_distance_m", "target_w",
+    "target_w",
 ]
 SAMPLE_COLUMNS = ["ts", "devtype", "devnum", "metric", "value", "unit"]
 

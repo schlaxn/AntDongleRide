@@ -5,6 +5,7 @@ and the 5 Hz snapshot publisher. Unlike RideEngine, a finished session is always
 finalized once: either by stop() or by the loop noticing the clock ran out.
 """
 import queue
+from collections import deque
 import threading
 import time
 from datetime import datetime
@@ -31,6 +32,13 @@ class BoatBotAdapter:
 STALE_S = 2.5          # a value older than this is shown as absent
 HOLD_S = 3.0           # speed gap up to this long holds the last value for physics
 STROKE_HOLD_S = 8.0    # the stroke rate is a rate; hold it longer than the speed
+SMOOTH_S = 10.0        # displayed speed, split and power are averaged over the last 10 seconds
+HIST_KEEP_S = 14.0     # how much history is kept for that average
+# step detector: a deliberate change in effort shows quickly, steady stretches stay averaged
+SHORT_S = 2.0          # the fast average
+JUMP_THRESH = 0.10     # the fast average must differ from the slow one by more than 10% ...
+JUMP_HOLD_S = 1.5      # ... for this long before the display follows it
+JUMP_RELEASE = 0.05    # the display goes back to the slow average once they agree within 5%
 METRICS = ("speed", "stroke", "stroke_rate", "power", "heart_rate")
 
 # Target watts per phase kind. Sustained efforts stay at or below 180 W.
@@ -53,13 +61,13 @@ class RowState:
         self.status = "preview"     # live physics on the flat river before Start
         self.elapsed = 0.0
         self.distance_m = 0.0
-        self.virtual_m = 0.0
-        self.v_virtual = 0.0
         self.strokes = 0
         self.latest: dict[str, tuple[float, float]] = {}
         self.power_w = 0.0
         self._energy_j = 0.0
         self._run_s = 0.0
+        self._hist: dict[str, deque] = {"speed": deque(), "power": deque()}
+        self._jump = {m: {"on": False, "since": None} for m in ("speed", "power")}
         self.bots_on = True
         self.traffic: Traffic | None = None   # other boats (dolphins), created on start
 
@@ -68,6 +76,40 @@ class RowState:
         if metric == "stroke":
             self.strokes += 1
         self.latest[metric] = (ts, value)
+        if metric in self._hist:
+            q = self._hist[metric]
+            q.append((ts, value))
+            while q and ts - q[0][0] > HIST_KEEP_S:
+                q.popleft()
+
+    def smoothed(self, metric: str, now: float, window: float = SMOOTH_S):
+        """Mean of the samples of the last `window` seconds: steadies the display, not the physics."""
+        q = self._hist.get(metric)
+        if not q:
+            return None
+        vals = [v for t, v in q if now - t <= window]
+        return sum(vals) / len(vals) if vals else None
+
+    def display(self, metric: str, now: float):
+        """Slow average (10 s) for steady efforts; the fast average (2 s) while a deliberate
+        change is under way, so intervals show up within a couple of seconds."""
+        slow = self.smoothed(metric, now, SMOOTH_S)
+        fast = self.smoothed(metric, now, SHORT_S)
+        if slow is None or fast is None or slow <= 0:
+            return slow
+        st = self._jump[metric]
+        diff = abs(fast - slow) / slow
+        if st["on"]:
+            if diff < JUMP_RELEASE:
+                st["on"], st["since"] = False, None
+        elif diff > JUMP_THRESH:
+            if st["since"] is None:
+                st["since"] = now
+            if now - st["since"] >= JUMP_HOLD_S:
+                st["on"] = True
+        else:
+            st["since"] = None
+        return fast if st["on"] else slow
 
     def value(self, metric: str, now: float, hold: float = HOLD_S):
         item = self.latest.get(metric)
@@ -111,10 +153,8 @@ class RowState:
         v_in = self.value("speed", now) or 0.0
         p_in = WATT_CONST * max(v_in, 0.0) ** 3
         self.power_w = p_in
-        self.v_virtual = self.boat.step(self.v_virtual, p_in, dt)
         if self.status == "running":
             self.distance_m += v_in * dt
-            self.virtual_m += self.v_virtual * dt
             self.elapsed += dt
             self._run_s += dt
             self._energy_j += p_in * dt
@@ -136,9 +176,12 @@ class RowState:
     def snapshot(self, now: float) -> dict:
         seg = self.phase()
         kind = seg.kind if seg else self.status
-        v_sensor = self.value("speed", now)
+        v_sensor = self.display("speed", now)
         spm = self.value("stroke_rate", now, hold=STROKE_HOLD_S)
-        power = self.value("power", now)
+        power = self.display("power", now)
+        if power is None and v_sensor is not None:
+            # no power samples (e.g. the simulator): the cube law on the smoothed speed, so the display stays steady
+            power = WATT_CONST * max(v_sensor, 0.0) ** 3
         avg_power = self._energy_j / self._run_s if self._run_s > 0 else None
         return {
             "type": "row",
@@ -151,20 +194,18 @@ class RowState:
             "phase_left_s": _r(seg.end - self.elapsed, 1) if seg else None,
             "next_phase": self._next_kind(seg),
             "speed_ms": _r(v_sensor, 2),
-            "split_s": _r(500.0 / v_sensor, 1) if v_sensor and v_sensor > 0 else None,
+            "split_s": _r(500.0 / v_sensor) if v_sensor and v_sensor > 0 else None,   # whole seconds
             "power_w": _r(power if power is not None else self.power_w),
             "avg_power_w": _r(avg_power),
             "stroke_rate_spm": _r(spm, 1),
             "strokes": self.strokes,
             "distance_per_stroke_m": _r(self.distance_m / self.strokes, 2) if self.strokes else None,
             "distance_m": _r(self.distance_m, 1),
-            "virtual_speed_ms": _r(self.v_virtual, 2),
-            "virtual_distance_m": _r(self.virtual_m, 1),
             "hr_bpm": self.value("heart_rate", now, hold=STALE_S),
             "target_w": self.targets.get(kind),
             # dolphins are shown without names: only position, lane and speed are sent
             "bots": [{k: v for k, v in r.items() if k not in ("name", "arch")}
-                     for r in self.traffic.snapshot(self.virtual_m)["riders"]] if self.traffic else [],
+                     for r in self.traffic.snapshot(self.distance_m)["riders"]] if self.traffic else [],
             "bot_counts": dict(self.traffic.counts) if self.traffic else {"met": 0, "passed": 0, "passed_by": 0},
         }
 
@@ -275,7 +316,6 @@ class RowEngine:
             "summary": {
                 "duration_s": _r(st.elapsed, 1),
                 "distance_m": _r(st.distance_m, 1),
-                "virtual_distance_m": _r(st.virtual_m, 1),
                 "strokes": st.strokes,
                 "avg_power_w": _r(st._energy_j / st._run_s, 1) if st._run_s > 0 else None,
             },
@@ -316,7 +356,8 @@ class RowEngine:
 
                 if st.status == "running" and st.traffic is not None:
                     ph = st.phase()
-                    st.traffic.update(dt, st.elapsed, st.virtual_m, st.v_virtual, st.power_w,
+                    # the other boats live on the measured distance, like the view
+                    st.traffic.update(dt, st.elapsed, st.distance_m, st.value("speed", now) or 0.0, st.power_w,
                                       ph.kind if ph else None, 0.0)
 
                 if st.status == "running":
