@@ -78,6 +78,7 @@ const COLORS = {
   wake: 0xffffff,
   hull: 0xe9edf1, hullTrim: 0xc2410c, wood: 0xd9c08a, kit: 0x1f3a8a, skin: 0xf0c8a0, hair: 0x3b2a1e,
   blade: 0xf2f2f2, sail: 0xfafafa, duck: 0x7a5a3a, duckHead: 0x2d6b3c, bridge: 0x8b8f96,
+  blondeHair: 0xe8c872,
   sky: 0x9fd8f4, seat: 0x2b2b2b, dolphin: 0x6d8ba3, dolphinBelly: 0xdfe8ef, bark: 0x6b5340,
   rope: 0x4a3a2a, envelope: [0xd9d2c3, 0xb9c4cf, 0xe0c9a6],
   balloon: [0xd7263d, 0xf4a300, 0x2e86ab, 0x7bc043, 0xf2f2f2, 0x8e44ad],
@@ -733,15 +734,9 @@ export function createRowWorld(container, onFps) {
   boat.add(rower);
   const seat = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.06, 0.42), lam(COLORS.seat));
   rower.add(seat);
-  // the seat-bottom: two rounded buttocks resting on the seat, one for each side
-  for (const sx of [-1, 1]) {
-    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.1, 20, 14), lam(COLORS.kit));
-    cheek.scale.set(0.85, 0.7, 1.05);
-    cheek.position.set(sx * 0.08, 0.1, 0.02);
-    rower.add(cheek);
-  }
   const torsoPivot = new THREE.Group();
   rower.add(torsoPivot);
+  // torso: a square block, 0.55 m from hip to shoulder, 0.34 m across
   // torso: a square block, 0.55 m from hip to shoulder, 0.34 m across
   const torso = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.55, 0.22), lam(COLORS.kit));
   torso.position.y = 0.275;
@@ -754,7 +749,7 @@ export function createRowWorld(container, onFps) {
   head.scale.set(0.85, 1.05, 0.95);
   head.position.set(0, 0.7, -0.02);
   torsoPivot.add(head);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.135, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.5), lam(COLORS.hair));
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.135, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.5), lam(COLORS.blondeHair));
   hair.position.set(0, 0.715, -0.02);
   hair.scale.set(0.85, 1.05, 0.95);
   torsoPivot.add(hair);
@@ -779,12 +774,11 @@ export function createRowWorld(container, onFps) {
     ripple.visible = false;
     scene.add(ripple);
     // shoulder, hand and foot: small rounded shapes at the joints
-    const shoulderJoint = new THREE.Mesh(new THREE.SphereGeometry(0.065, 16, 12), lam(COLORS.kit));
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 8), lam(COLORS.skin));
     hand.scale.set(1.2, 0.7, 1.0);
     const foot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.26), lam(COLORS.kit));
-    boat.add(shoulderJoint, hand, foot);
-    sculls.push({ side, arm, forearm, thigh, shin, shaft, blade, ripple, shoulderJoint, hand, foot });
+    boat.add(hand, foot);
+    sculls.push({ side, arm, forearm, thigh, shin, shaft, blade, ripple, hand, foot });
   }
 
   // the scull, the rower and the other moving things cast and take shadows too
@@ -992,7 +986,8 @@ export function createRowWorld(container, onFps) {
     // the rower faces the stern: the upper body is turned 180 degrees about the vertical axis,
     // and the lean (about the x axis) still goes towards the bow at the catch
     torsoPivot.rotation.set(lean, Math.PI, 0);
-    const shoulderY = 0.14 + 0.55 * Math.cos(lean), shoulderZ = seatZ + 0.55 * Math.sin(lean);
+    // the shoulders sit on the top of the torso: rower height (0.2) + hinge (0.14) + torso length (0.55)
+    const shoulderY = 0.29 + 0.55 * Math.cos(lean), shoulderZ = seatZ + 0.55 * Math.sin(lean);   // 5 cm lower than the top of the torso
     // knees bent (catch): arms straight out in front of the rower, towards the stern;
     // knees straight (finish): hands in front of the breast
     // hands are placed from the shoulders: arms fully extended at the catch, breast at the finish
@@ -1010,10 +1005,9 @@ export function createRowWorld(container, onFps) {
       const elbow = jointFrom(shoulderP, handP, 0.32, 0.27, new THREE.Vector3(sx * 0.4, -1, 0));
       beam(s.arm, shoulderP, elbow);
       beam(s.forearm, elbow, handP);
-      s.shoulderJoint.position.copy(shoulderP);
       s.hand.position.copy(handP);
       s.foot.position.copy(new THREE.Vector3(sx * 0.12, 0.2, STRETCHER_Z));
-      const hip = new THREE.Vector3(sx * 0.08, 0.12, seatZ);
+      const hip = new THREE.Vector3(sx * 0.08, 0.3, seatZ);   // on the seat (rower height 0.2 + seat 0.03 + hip)
       const foot = new THREE.Vector3(sx * 0.12, 0.2, STRETCHER_Z);
       const knee = kneeFrom(hip, foot);
       beam(s.thigh, hip, knee);
