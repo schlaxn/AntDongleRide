@@ -79,6 +79,8 @@ def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=N
     def sim_start():
         if simulator is None:
             return err("No simulator in this build", 503)
+        if source.connected:
+            return err("The real S4 is connected: disconnect it before running the simulator", 409)
         simulator.start()
         return jsonify({"ok": True, "running": True})
 
@@ -175,7 +177,7 @@ def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=N
 
     @bp.post("/api/row/fill")
     def fill_set():
-        """The monitor's fill setting (15.0 to 20.0 L). It scales the displayed power from now on."""
+        """The tank fill setting (15.0 to 20.0 L). It scales the displayed power from now on."""
         body = request.get_json(silent=True) or {}
         try:
             litres = float(body.get("litres"))
@@ -221,6 +223,8 @@ def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=N
             return err("No port selected")
         try:
             baud = int(body.get("baud", DEFAULT_BAUD))
+            if simulator is not None:
+                simulator.stop()          # real hardware: no simulated data in the boat
             info = source.connect(port, baud)
         except (RowerError, ValueError) as exc:
             return err(str(exc), 409)
@@ -230,6 +234,7 @@ def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=N
 
     @bp.post("/api/row/disconnect")
     def disconnect():
+        source.auto_reconnect = False       # a deliberate disconnect: do not reopen by itself
         source.disconnect()
         return jsonify({"ok": True})
 
@@ -241,6 +246,7 @@ def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=N
             "connected": source.connected,
             "roles": role_status(roles, hub.devices, now),
             "ble": {"hr_address": ble_state["hr"]},
+            "last_port": source.last_port,
         })
 
     @bp.post("/api/row/sensors/select")

@@ -179,8 +179,13 @@ class RowerSerial:
             try:
                 chunk = self._ser.read(256)
             except Exception as exc:
-                self._event(f"read failed: {exc}")
+                self._event(f"read failed (monitor off or unplugged?): {exc}")
                 self._running = False
+                try:
+                    self._ser.close()
+                except Exception:
+                    pass
+                self._ser = None          # not connected any more: the watchdog reopens the port
                 break
             if not chunk:
                 continue

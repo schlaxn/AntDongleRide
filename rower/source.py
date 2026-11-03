@@ -6,6 +6,7 @@ ingests the resulting samples into the hub.
 """
 import queue
 import threading
+import time
 
 from .profiles import Decoder
 from .serialdev import DEFAULT_BAUD, RowerError, RowerSerial
@@ -19,6 +20,8 @@ class RowerSource:
         self._q: queue.Queue | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.last_port: str | None = None     # remembered for the sensors dialog
+        self.auto_reconnect = True            # off after a deliberate disconnect
 
     @property
     def connected(self) -> bool:
@@ -29,11 +32,27 @@ class RowerSource:
 
     def connect(self, port: str, baud: int = DEFAULT_BAUD) -> dict:
         info = self.serial.connect(port, baud)
+        self.last_port = port
+        self.auto_reconnect = True
         self._q = self.serial.subscribe()
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="rower-source")
         self._thread.start()
         return info
+
+    def start_watchdog(self) -> None:
+        """Reopens the last port when the monitor comes back (powered off, unplugged, replugged).
+        Stays off after a deliberate disconnect."""
+        def watch():
+            while True:
+                time.sleep(2.0)
+                if self.auto_reconnect and self.last_port and not self.serial.connected:
+                    try:
+                        self.disconnect()           # clears the old reader and queue
+                        self.connect(self.last_port)
+                    except Exception:
+                        pass                        # not there yet: try again in 2 s
+        threading.Thread(target=watch, daemon=True, name="rower-watchdog").start()
 
     def disconnect(self) -> None:
         self._stop.set()

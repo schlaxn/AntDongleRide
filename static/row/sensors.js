@@ -22,7 +22,25 @@ function msg(text, ok) {
 export function openSensorDialog() {
   const dlg = $("sensorDlg");
   if (!dlg.open) dlg.showModal();
-  refresh();
+  refresh().then(fillPorts);
+}
+
+// Ready to connect without scanning: the last port used, and the simulator. Scanning is manual.
+function fillPorts(st) {
+  const sel = $("portSel");
+  if (sel.options.length) return;
+  sel.innerHTML = "";
+  const last = st && st.last_port;
+  if (last) {
+    const o = document.createElement("option");
+    o.value = last;
+    o.textContent = `${last} (last used)`;
+    sel.appendChild(o);
+  }
+  const simOpt = document.createElement("option");
+  simOpt.value = SIM_PORT;
+  simOpt.textContent = "Simulated S4 (no hardware)";
+  sel.appendChild(simOpt);
 }
 
 export async function refresh() {
@@ -98,7 +116,7 @@ export function wireSensors() {
   $("btnHrScan").onclick = scanHr;
   $("btnS4Connect").onclick = async () => {
     const port = $("portSel").value;
-    if (!port) return msg("Scan ports and pick one first", false);
+    if (!port) return msg("No port selected", false);
     try {
       if (port === SIM_PORT) {
         await api("/api/row/sim/start", {});

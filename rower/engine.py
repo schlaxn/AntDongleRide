@@ -17,6 +17,7 @@ from bots import Traffic
 
 from .boat import BoatPhysics
 from .profiles import WATT_CONST
+from .smoothing import AdaptiveSmoother
 from .recorder import RowRecorder
 
 
@@ -33,13 +34,17 @@ STALE_S = 2.5          # a value older than this is shown as absent
 HOLD_S = 3.0           # speed gap up to this long holds the last value for physics
 STROKE_HOLD_S = 8.0    # the stroke rate is a rate; hold it longer than the speed
 SMOOTH_S = 10.0        # displayed speed, split and power are averaged over the last 10 seconds
-HIST_KEEP_S = 14.0     # how much history is kept for that average
+HIST_KEEP_S = 16.0     # how much history is kept for that average
+STROKE_SMOOTH_S = 15.0 # power and stroke rate: the monitor's 15 s average while steady
+STROKE_SHORT_S = 5.0   # ... and the fast average (about two strokes) while a deliberate change is under way
+STROKE_METRICS = ("power", "stroke_rate")
 # step detector: a deliberate change in effort shows quickly, steady stretches stay averaged
 SHORT_S = 2.0          # the fast average
 JUMP_THRESH = 0.10     # the fast average must differ from the slow one by more than 10% ...
 JUMP_HOLD_S = 1.5      # ... for this long before the display follows it
 JUMP_RELEASE = 0.05    # the display goes back to the slow average once they agree within 5%
-METRICS = ("speed", "stroke", "stroke_rate", "power", "heart_rate")
+METRICS = ("speed", "distance", "stroke", "stroke_rate", "power", "stroke_speed", "heart_rate")
+STROKE_AVG_N = 3       # the status panel shows power and pace averaged over this many completed strokes
 
 # Target watts per phase kind. Sustained efforts stay at or below 180 W.
 DEFAULT_TARGETS = {"warmup": 90, "work": 150, "recover": 70, "between": 50, "cooldown": 80}
@@ -66,8 +71,17 @@ class RowState:
         self.power_w = 0.0
         self._energy_j = 0.0
         self._run_s = 0.0
-        self._hist: dict[str, deque] = {"speed": deque(), "power": deque()}
-        self._jump = {m: {"on": False, "since": None} for m in ("speed", "power")}
+        self._hist: dict[str, deque] = {"speed": deque(), "power": deque(), "stroke_rate": deque()}
+        self._jump = {m: {"on": False, "since": None} for m in ("speed", "power", "stroke_rate")}
+        self._stroke_hist = {m: deque(maxlen=STROKE_AVG_N) for m in ("power", "stroke_speed")}
+        self._power_f = AdaptiveSmoother(tau_s=15.0, band=0.05, confirm_s=2.0)   # the chosen live power filter
+        self._power_ts: float | None = None
+        self._speed_f = AdaptiveSmoother(tau_s=15.0, band=0.05, confirm_s=2.0)   # the same filter, on the live speed
+        self._speed_ts: float | None = None
+        self._spm_f = AdaptiveSmoother(tau_s=15.0, band=0.05, confirm_s=2.0)   # the same filter, on the stroke rate
+        self._spm_ts: float | None = None
+        self._dist_m: float | None = None      # the decoder's distance: ticks since its first stroke / 91.8
+        self._dist_offset = 0.0                # its value when this session started
         self.bots_on = True
         self.traffic: Traffic | None = None   # other boats (dolphins), created on start
 
@@ -75,6 +89,22 @@ class RowState:
     def update(self, metric: str, ts: float, value: float) -> None:
         if metric == "stroke":
             self.strokes += 1
+        if metric in self._stroke_hist:
+            self._stroke_hist[metric].append(value)     # one value per completed stroke
+        if metric == "distance":
+            self._dist_m = value
+        if metric == "power":
+            dt = ts - self._power_ts if self._power_ts is not None else None
+            self._power_f.update(value, dt)
+            self._power_ts = ts
+        if metric == "stroke_rate":
+            dt = ts - self._spm_ts if self._spm_ts is not None else None
+            self._spm_f.update(value, dt)
+            self._spm_ts = ts
+        if metric == "speed":
+            dt = ts - self._speed_ts if self._speed_ts is not None else None
+            self._speed_f.update(value, dt)
+            self._speed_ts = ts
         self.latest[metric] = (ts, value)
         if metric in self._hist:
             q = self._hist[metric]
@@ -93,8 +123,12 @@ class RowState:
     def display(self, metric: str, now: float):
         """Slow average (10 s) for steady efforts; the fast average (2 s) while a deliberate
         change is under way, so intervals show up within a couple of seconds."""
-        slow = self.smoothed(metric, now, SMOOTH_S)
-        fast = self.smoothed(metric, now, SHORT_S)
+        if metric in STROKE_METRICS:
+            slow = self.smoothed(metric, now, STROKE_SMOOTH_S)
+            fast = self.smoothed(metric, now, STROKE_SHORT_S)
+        else:
+            slow = self.smoothed(metric, now, SMOOTH_S)
+            fast = self.smoothed(metric, now, SHORT_S)
         if slow is None or fast is None or slow <= 0:
             return slow
         st = self._jump[metric]
@@ -111,6 +145,13 @@ class RowState:
             st["since"] = None
         return fast if st["on"] else slow
 
+    def stroke_avg(self, metric: str):
+        """Mean of the last STROKE_AVG_N completed strokes, or None before the first stroke."""
+        q = self._stroke_hist.get(metric)
+        if not q:
+            return None
+        return sum(q) / len(q)
+
     def value(self, metric: str, now: float, hold: float = HOLD_S):
         item = self.latest.get(metric)
         if not item:
@@ -125,6 +166,7 @@ class RowState:
         if self.status not in ("idle", "preview"):
             raise RuntimeError(f"Cannot start from {self.status}")
         self.status = "running"
+        self._dist_offset = self._dist_m if self._dist_m is not None else 0.0
 
     def pause(self) -> None:
         if self.status != "running":
@@ -154,7 +196,11 @@ class RowState:
         p_in = WATT_CONST * max(v_in, 0.0) ** 3
         self.power_w = p_in
         if self.status == "running":
-            self.distance_m += v_in * dt
+            if self._dist_m is not None:
+                # distance as the monitor counts it: ticks / 91.8, from this session's start
+                self.distance_m = max(0.0, self._dist_m - self._dist_offset)
+            else:
+                self.distance_m += v_in * dt
             self.elapsed += dt
             self._run_s += dt
             self._energy_j += p_in * dt
@@ -176,9 +222,18 @@ class RowState:
     def snapshot(self, now: float) -> dict:
         seg = self.phase()
         kind = seg.kind if seg else self.status
-        v_sensor = self.display("speed", now)
-        spm = self.value("stroke_rate", now, hold=STROKE_HOLD_S)
-        power = self.display("power", now)
+        spm = self._spm_f.avg if self.value("stroke_rate", now, hold=STROKE_HOLD_S) is not None else None
+        v_pace = self.stroke_avg("stroke_speed")     # pace and power: 3-stroke averages, per stroke
+        v_sensor = v_pace if v_pace is not None else self.display("speed", now)
+        # the live speed shown is the filtered speed; pace (split) stays on the 3-stroke average
+        v_speed = self._speed_f.avg if self.value("speed", now, hold=STALE_S) is not None else v_sensor
+        # power: the 15 s average (per stroke samples), with the fast path for deliberate changes
+        power = self._power_f.avg if self.value("power", now, hold=STROKE_HOLD_S) is not None else None
+        if power is None:
+            power = self.display("power", now)
+        if self.value("speed", now, hold=STALE_S) is None:
+            # no data from the monitor: no speed, power or stroke in the boat
+            v_sensor, power, spm = 0.0, 0.0, None
         if power is None and v_sensor is not None:
             # no power samples (e.g. the simulator): the cube law on the smoothed speed, so the display stays steady
             power = WATT_CONST * max(v_sensor, 0.0) ** 3
@@ -193,14 +248,14 @@ class RowState:
             "rep": seg.rep if seg else 0,
             "phase_left_s": _r(seg.end - self.elapsed, 1) if seg else None,
             "next_phase": self._next_kind(seg),
-            "speed_ms": _r(v_sensor, 2),
+            "speed_ms": _r(v_speed, 2),
             "split_s": _r(500.0 / v_sensor) if v_sensor and v_sensor > 0 else None,   # whole seconds
             "power_w": _r(power if power is not None else self.power_w),
             "avg_power_w": _r(avg_power),
             "stroke_rate_spm": _r(spm, 1),
             "strokes": self.strokes,
             "distance_per_stroke_m": _r(self.distance_m / self.strokes, 2) if self.strokes else None,
-            "distance_m": _r(self.distance_m, 1),
+            "distance_m": _r(self.distance_m, 0),   # whole metres, as the monitor shows
             "hr_bpm": self.value("heart_rate", now, hold=STALE_S),
             "target_w": self.targets.get(kind),
             # dolphins are shown without names: only position, lane and speed are sent

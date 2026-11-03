@@ -206,16 +206,40 @@ Four runs from rest to a full stop, recorded with the calibration page from Star
 - The `P0x` lines are sent only when at least one tick was counted: the smallest value in all recordings is 1, and nothing arrives at rest. In a slow coast the lines are sparse, each with a 1.
 - With the old per-line method the app reproduces the monitor on the 218 m run (217.8 m) only because two errors cancel: 2.2 % low while rowing, 15 % high in the coast (the 0.43 m/s floor of a mean of 1s). On the 134 m run it also counts the 3.7 m before the first stroke (138.8 m against 134 m). `CODE_PER_MS` was not changed.
 
-## 5g. Decision for the decoder (not implemented yet)
+## 5g. Decoder: speed and distance from the ticks (implemented 3 Nov, later)
 
 Take speed and distance directly from the ticks, as the monitor does:
 - speed = ticks in a time window (at least 1 s, because the timestamps come in bursts) / window / 91.8;
 - distance = ticks since the first `SS` / 91.8;
 - pace = 500 / speed; watts = c(L) × speed³ with c(L) = 1.78 × (1 + 0.054 (L - 17)).
 
-The virtual landscape follows the measured distance and speed, and the display adds estimated watts and pace from the calibration. Missing: the rowing app has no setting for the fill level (`Decoder.fill_litres` stays at 17), so the watts are right only at 17 L until a fill setting is added to the row page.
+The virtual landscape follows the measured distance and speed, and the display adds estimated watts and pace from the calibration. Implemented: `rower/profiles.py` (`TICKS_PER_M = 91.8`, `TICK_WINDOW_S = 1.0`). Speed is the ticks in the last second over 91.8, so absent lines count as zero. Distance is the ticks since the first stroke over 91.8, emitted as a `distance` sample. Power is updated once per completed stroke (SS to SS), from that stroke's ticks, as the monitor does. The tank fill is set on the row page (`Tank fill (L)`, 15.0 to 20.0 L). The engine takes distance from the `distance` sample, counted from the session start and shown in whole metres, as the monitor does. Speed is not used for distance. The status panel shows power and pace averaged over the last three completed strokes. Speed still feeds the dolphins.
+
+## 5h. Power: from the averaged speed, updated once per stroke (3 Nov, decision)
+
+- Power is calculated from the averaged speed signal: the mean of the 1 s speed over one stroke (from the previous SS to this SS), then `W = 1.78 * v^3 * fill factor` (`rower/profiles.py`, `Decoder`, the `_speeds` list reset at each SS).
+- It is given only once per stroke (SS). The UI and the report see one power value per stroke, and nothing between strokes.
+- Dropped: the velocity-interpolation scheme, per-second power, and power from a single stroke's tick sum. The sampled-line randomness was the reason for leaving them.
+- The 1 s speed window starts at zero when the decoder starts, so the first stroke after a start is low. The test warms the window up first.
+- The live display filters this per-stroke power (band 5 %, confirm 2 s, 15 s steady average). The report plots the per-stroke values, recomputed from the recorded codes and stroke markers.
+- The same filter (band 5 %, confirm 2 s, 15 s steady average) is applied to the live speed (`speed_ms`). The pace (split) stays on the 3-stroke average.
+- The same filter is applied to the live stroke rate (fed once per stroke, with the time between strokes as the step). The recording keeps the raw values.
+
+## 5i. Filter choices (3 Nov)
+
+- Filter: `rower/smoothing.py`, `AdaptiveSmoother`. While the value stays within a band of its average it is averaged with a 15 s exponential window (time-based, so irregular samples are fine). When a new level stays outside the band for a confirm time, the average jumps to the mean of that new level at once.
+- Chosen settings: **band 5 %, confirm 2 s**, 15 s steady window.
+- Live display (`rower/engine.py`, `RowState`):
+  - power: filtered, fed once per completed stroke (the time between strokes is the step);
+  - speed (`speed_ms`): filtered, fed per speed line (time step from the timestamps);
+  - stroke rate: filtered, fed once per stroke;
+  - pace (split): still the 3-stroke average, as chosen.
+- Recording: raw values, unchanged (raw samples, raw 1 s speed, stroke markers).
+- Postprocessing (`rower/report.py`): nine settings (band 5, 8, 12 %; confirm 1, 2, 3 s) for speed, power and stroke rate, to compare against raw. The dropdown defaults to band 5 %, confirm 2 s.
+- Known limit: the spin-down lag (section 6) is not removed by this filter; it is a separate open item.
 
 ## 6. Open questions
+- **Spin-down lag (kept as is for now).** Power comes from the flywheel speed, so when effort stops the speed falls slowly. The power readout stays high at the end of intervals even with no effort applied. Spin-up is not a problem. Future fix: a model of the flywheel deceleration, or a rule that lets the power fall with the stroke rather than with the speed.
 
 1. **Averaging window.** The monitor appears to average over about 25 seconds. The 164 W ramp supports this. A clean step test would confirm it.
 2. **Linear fill effect.** 15, 17, 19 and 20 L (monitor readings, 5e) lie on a straight line, 0.054 per litre, within the reading error (the 19 L watts were 100 or 101). 13 L and 18.5 L are still unmeasured.

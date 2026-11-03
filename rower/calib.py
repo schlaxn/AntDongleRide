@@ -32,7 +32,7 @@ EVAL_S = 1.0                       # ... evaluated once a second
 HOLD_S = 5.0                       # ... and must stay in band this long (after the settle gate)
 STEADY_POWER_PCT = 2.0             # band on power
 CODE_BAND = (STEADY_POWER_PCT / 100.0) / 3.0   # relative band on code (power ~ v**3, code ~ v)
-LOG_METRICS = ("code", "stroke", "stroke_rate", "speed", "power", "split_500m", "heart_rate")
+LOG_METRICS = ("code", "stroke", "stroke_end", "stroke_rate", "speed", "power", "split_500m", "heart_rate")
 OFF_PACE_PCT = 15.0                # a locked code this far from the nominal scale is flagged
 STALE_CYCLE_S = 2.5                # no stroke for this long: the steady run no longer counts
 

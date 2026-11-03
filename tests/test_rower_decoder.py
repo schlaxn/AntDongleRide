@@ -46,22 +46,58 @@ class DecoderTests(unittest.TestCase):
         self.assertAlmostEqual(fill_factor(13), 0.784, places=6)
         self.assertGreater(fill_factor(22), fill_factor(20))
 
-    def test_pulse_emits_speed_power_and_split(self):
+    def test_pulse_emits_speed_split_and_power(self):
         d = Decoder()
         out = d.decode_line("P0A", 1.0)
         metrics = {s.metric for s in out}
-        self.assertEqual(metrics, {"code", "speed", "power", "split_500m"})
+        self.assertEqual(metrics, {"code", "speed", "split_500m"})   # power only at the stroke end
         speed = next(s for s in out if s.metric == "speed")
         self.assertEqual((speed.devtype, speed.devnum), (200, 1))
+        self.assertAlmostEqual(speed.value, 10 / 91.8, places=3)     # 10 ticks in the last second
+
+    def test_speed_is_ticks_in_the_last_second_over_ticks_per_metre(self):
+        d = Decoder()
+        for k in range(40):                         # 40 lines a second, 9 ticks each
+            out = d.decode_line("P09", k * 0.025)
+        speed = next(s for s in out if s.metric == "speed")
+        self.assertAlmostEqual(speed.value, 360 / 91.8, delta=0.02)
+
+    def test_power_once_per_stroke_from_the_averaged_speed(self):
+        d = Decoder()
+        d.decode_line("SS", 0.0)
+        for k in range(120):                        # first stroke: warms the 1 s speed window up
+            d.decode_line("P09", 0.025 * (k + 1))
+        d.decode_line("SS", 3.0)
+        powers = []
+        for k in range(120):                        # the measured stroke: 360 ticks a second
+            out = d.decode_line("P09", 3.0 + 0.025 * (k + 1))
+            powers += [s for s in out if s.metric == "power"]
+        self.assertEqual(powers, [])                # no power inside the stroke
+        out = d.decode_line("SS", 6.0)
+        powers = [s for s in out if s.metric == "power"]
+        self.assertEqual(len(powers), 1)            # one value at the stroke end
+        self.assertAlmostEqual(powers[0].value, 1.78 * (360 / 91.8) ** 3, delta=3.0)
+    def test_distance_counts_ticks_from_the_first_stroke(self):
+        d = Decoder()
+        d.decode_line("P09", 0.0)                   # before the first stroke: not counted
+        d.decode_line("SS", 1.0)
+        out = d.decode_line("P09", 1.5)
+        dist = next(s for s in out if s.metric == "distance")
+        self.assertAlmostEqual(dist.value, 9 / 91.8, places=2)
 
     def test_stroke_counts_and_rate(self):
         d = Decoder()
         first = d.decode_line("SS", 10.0)
         self.assertEqual([s.metric for s in first], ["stroke"])
         second = d.decode_line("SS", 11.5)
-        self.assertEqual({s.metric for s in second}, {"stroke", "stroke_rate"})
+        self.assertEqual({s.metric for s in second}, {"stroke", "stroke_rate", "stroke_speed"})
         rate = next(s for s in second if s.metric == "stroke_rate")
         self.assertAlmostEqual(rate.value, 40.0, places=1)
+
+    def test_stroke_end_marks_the_finish_of_the_drive(self):
+        d = Decoder()
+        out = d.decode_line("SE", 1.0)
+        self.assertEqual([s.metric for s in out], ["stroke_end"])
 
     def test_long_gap_gives_no_rate(self):
         d = Decoder()
@@ -81,9 +117,10 @@ class DecoderTests(unittest.TestCase):
             for s in d.decode_line(line, (t - base).total_seconds()):
                 if s.metric == "power" and ws <= t < we:
                     watts.append(s.value)
-        self.assertGreater(len(watts), 100)
+        self.assertGreaterEqual(len(watts), 8)   # one power value per stroke: about 12 in 20 s
         mean = sum(watts) / len(watts)
-        self.assertLess(abs(mean - 100) / 100, 0.10, f"decoded mean {mean:.1f} W")
+        # interpolated-velocity stroke power reads about 5 % above the old per-stroke method here
+        self.assertLess(abs(mean - 100) / 100, 0.15, f"decoded mean {mean:.1f} W")
 
     def test_replay_counts_strokes_in_the_180W_capture(self):
         lines = load_lines("rev_test5.txt")

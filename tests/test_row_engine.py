@@ -87,7 +87,7 @@ class RowStateTests(unittest.TestCase):
         # steady, with a little noise: the display stays at the average
         for i in range(250):
             t = i * 0.1
-            st.update("speed", t, 4.0 + (0.1 if i % 2 else -0.1))
+            st.update("speed", t, 4.0 + (0.05 if i % 2 else -0.05))   # about 1 % noise, inside the 5 % band
         steady = st.snapshot(24.9)["speed_ms"]
         self.assertAlmostEqual(steady, 4.0, delta=0.05)
         # a deliberate step to 5 m/s: the display follows within about 2.5 seconds
@@ -104,6 +104,40 @@ class RowStateTests(unittest.TestCase):
             if i % 2 == 1:
                 st.snapshot(i * 0.1)
         self.assertAlmostEqual(st.snapshot(49.9)["speed_ms"], 5.0, delta=0.05)
+
+    def test_panel_shows_the_last_power_and_three_stroke_pace(self):
+        st = RowState(short_workout())
+        for w in (100, 120, 140):
+            st.update("power", 1.0, w)
+        for v in (3.0, 3.3, 3.6):
+            st.update("stroke_speed", 1.0, v)
+        st.update("speed", 1.0, 3.6)                # live data from the monitor
+        snap = st.snapshot(1.0)
+        self.assertAlmostEqual(snap["power_w"], 130.0, places=1)   # the live filter: 120 and 140 confirmed, mean 130
+        self.assertAlmostEqual(snap["speed_ms"], 3.6, places=2)     # live speed: the filtered speed
+        self.assertAlmostEqual(snap["split_s"], 500 / 3.3, delta=1)  # pace: mean of 3 strokes
+        st.update("stroke_speed", 1.0, 3.9)
+        self.assertAlmostEqual(st.stroke_avg("stroke_speed"), (3.3 + 3.6 + 3.9) / 3, places=6)
+
+    def test_distance_from_the_decoder_counts_from_the_session_start(self):
+        st = RowState(short_workout())
+        st.update("distance", 1.0, 5.0)              # before the session: the decoder's running total
+        st.start()
+        st.update("distance", 2.0, 12.4)
+        st.advance(2.0, 1.0)
+        self.assertAlmostEqual(st.distance_m, 7.4, places=6)
+        self.assertEqual(st.snapshot(2.0)["distance_m"], 7)   # whole metres
+
+    def test_stroke_rate_display_is_filtered(self):
+        st = RowState(short_workout())
+        for i in range(12):                          # steady 30 spm: one stroke every 2 s
+            st.update("stroke_rate", 1.0 + 2.0 * i, 30.0)
+        st.update("speed", 23.0, 3.8)               # live data, so the snapshot is not "no data"
+        self.assertAlmostEqual(st.snapshot(23.0)["stroke_rate_spm"], 30.0, places=2)
+        for i in range(12, 16):                      # a deliberate change to 36 spm, confirmed in 2 s
+            st.update("stroke_rate", 1.0 + 2.0 * i, 36.0)
+        st.update("speed", 31.0, 3.8)
+        self.assertAlmostEqual(st.snapshot(31.0)["stroke_rate_spm"], 36.0, places=2)
 
     def test_split_from_speed(self):
         st = RowState(short_workout())

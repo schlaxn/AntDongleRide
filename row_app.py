@@ -51,6 +51,7 @@ if __name__ == "__main__":
     ap.add_argument("--serial", metavar="PORT", help="read the S4 on this serial port, e.g. COM6")
     ap.add_argument("--port", type=int, default=5001)
     args = ap.parse_args()
+    source.start_watchdog()                  # reopens the port when the monitor comes back
     if args.serial:
         source.connect(args.serial)
         print(f"Reading the S4 on {args.serial}.")

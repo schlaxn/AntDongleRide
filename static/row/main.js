@@ -122,7 +122,6 @@ $("wPreset").onchange = async () => {
 // Start checks the rower is live first; the sensor dialog opens if it is not.
 async function startRow(skipCheck) {
   unlockAudio();
-  if (!skipCheck && status !== "paused" && !rowerReady) { openSensorDialog(); return; }
   if (status !== "running" && status !== "paused") {
     if (!(await loadWorkout())) return;
   }
@@ -190,7 +189,7 @@ function applyBots() {
 }
 botsBox.onchange = applyBots;
 
-// monitor fill setting: scales the displayed power (the speed is not affected)
+// tank fill setting: scales the displayed power (the speed is not affected)
 function showFill(j) {
   $("fillL").value = j.litres;
   $("fillInfo").textContent = `power x${j.factor}`;
@@ -228,7 +227,17 @@ function onSnapshot(s) {
 }
 
 const lastSeen = {}, lastValue = {};
+// The marker's own time on this page's clock: its timestamp, corrected for the delivery delay.
+// Lines arrive in bursts, so the arrival time alone is late and uneven.
+let lagBase = Infinity;
+function eventPerfMs(ts) {
+  const delay = Date.now() / 1000 - ts;          // seconds from the line being read to this page
+  lagBase = Math.min(lagBase, delay);
+  return performance.now() - (delay - lagBase) * 1000;
+}
 function onSample(m) {
+  if (m.metric === "stroke") world?.strokeEvent("ss", eventPerfMs(m.ts));
+  else if (m.metric === "stroke_end") world?.strokeEvent("se", eventPerfMs(m.ts));
   lastSeen[m.metric] = Date.now();
   lastValue[m.metric] = m.value;
   const age = (k) => (lastSeen[k] ? (Date.now() - lastSeen[k]) / 1000 : null);
@@ -267,7 +276,8 @@ async function init() {
   connectStream();
   const poll = async () => {
     const st = await refreshSensors();
-    rowerReady = sensorsLive(st);
+    // ready as soon as the port is open (or the simulator runs): the data starts with the first stroke
+    rowerReady = !!(st && (st.connected || sensorsLive(st)));
     updateButtons();
   };
   await poll();

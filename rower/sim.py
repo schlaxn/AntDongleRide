@@ -28,6 +28,7 @@ class SimulatedRower:
         self._hr = 70.0
         self._next_stroke: float | None = None
         self._last_hr_ts = 0.0
+        self._se_at: float | None = None
         self._cal_v = 0.0
 
     @property
@@ -78,12 +79,17 @@ class SimulatedRower:
             if spm > 0:
                 if self._next_stroke is None:
                     self._next_stroke = now
+                if self._se_at is not None and now >= self._se_at:
+                    self.hub.ingest_sample(Sample(now, "stroke_end", 1, "count",
+                                                  devtype=ROWER_DEVTYPE, devnum=ROWER_DEVNUM))
+                    self._se_at = None
                 if now >= self._next_stroke:
                     self.hub.ingest_sample(Sample(now, "stroke", 1, "count",
                                                   devtype=ROWER_DEVTYPE, devnum=ROWER_DEVNUM))
                     self.hub.ingest_sample(Sample(now, "stroke_rate", round(spm, 1), "spm",
                                                   devtype=ROWER_DEVTYPE, devnum=ROWER_DEVNUM))
                     self._next_stroke = now + 60.0 / spm
+                    self._se_at = now + 0.4 * 60.0 / spm   # drive is 40 % of the stroke
             else:
                 self._next_stroke = None
 
