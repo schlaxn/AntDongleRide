@@ -46,13 +46,19 @@
 <main>
   <h1>Calibration <span class="muted" id="levelTag"></span></h1>
 
+  <div id="live" style="border-radius:12px;padding:14px 16px;margin-bottom:12px;font:700 22px system-ui,sans-serif;background:#7f1d1d;color:#fff">
+    <span id="liveDot">●</span> <span id="liveText">Waiting for the monitor…</span>
+    <div id="liveSub" style="font:400 16px system-ui,sans-serif;opacity:.9;margin-top:4px"></div>
+  </div>
+
   <div class="card">
     <div class="row">
       <label class="muted">Fill
         <select id="fill">
           <option value="17" selected>17 L</option>
-          <option value="15" disabled>15 L (later)</option>
-          <option value="19" disabled>19 L (later)</option>
+          <option value="15">15 L</option>
+          <option value="19">19 L</option>
+          <option value="20">20 L</option>
         </select>
       </label>
       <button id="btnStart" class="primary">Start calibration</button>
@@ -163,8 +169,25 @@ function drawTrace(s) {
   g.fillStyle = fg;
 }
 
+function renderLive(m) {
+  const box = $("live");
+  if (!m) return;
+  if (m.live) {
+    box.style.background = "#14532d";
+    $("liveText").textContent = "Monitor sending data";
+    $("liveSub").textContent = `last line ${m.age_s} s ago · ${m.lines_per_s} lines/s · last code ${m.last_code} · strokes ${m.strokes}`;
+  } else {
+    box.style.background = "#7f1d1d";
+    $("liveText").textContent = "No data from the monitor";
+    $("liveSub").textContent = m.age_s == null
+      ? "Nothing received since the server started. Check the USB cable and the monitor."
+      : `last line ${m.age_s} s ago. Row to restart the stream.`;
+  }
+}
+
 function render(s) {
   S = s;
+  renderLive(s.monitor);
   const running = s.status === "running";
   const idle = !running;
   $("btnStart").disabled = running;

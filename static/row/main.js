@@ -190,6 +190,21 @@ function applyBots() {
 }
 botsBox.onchange = applyBots;
 
+// monitor fill setting: scales the displayed power (the speed is not affected)
+function showFill(j) {
+  $("fillL").value = j.litres;
+  $("fillInfo").textContent = `power x${j.factor}`;
+}
+$("btnFill").onclick = async () => {
+  try { showFill(await api("/api/row/fill", { litres: +$("fillL").value })); }
+  catch (e) { alert(e.message); }
+};
+api_get_fill().catch(() => {});
+async function api_get_fill() {
+  const r = await fetch("/api/row/fill");
+  if (r.ok) showFill(await r.json());
+}
+
 // ---------- live stream ----------
 function onSnapshot(s) {
   status = s.status;

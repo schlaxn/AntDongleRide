@@ -37,8 +37,14 @@ class DecoderTests(unittest.TestCase):
 
     def test_fill_factor(self):
         self.assertEqual(fill_factor(17), 1.0)
-        self.assertAlmostEqual(fill_factor(19), 1.07)
-        self.assertEqual(fill_factor(15), 1.0)   # not yet calibrated
+        # measured on the monitor at a steady speed (c = W / v^3 against 1.78 at 17 L)
+        self.assertAlmostEqual(fill_factor(15) * 1.78, 101 / 4.0 ** 3, delta=0.015)
+        self.assertAlmostEqual(fill_factor(19) * 1.78, 100.5 / 3.72 ** 3, delta=0.025)   # 100 or 101 W
+        self.assertAlmostEqual(fill_factor(20) * 1.78, 101 / 3.65 ** 3, delta=0.015)
+        # every other setting, whole or fractional litres, is on the straight line through 17 L
+        self.assertAlmostEqual(fill_factor(18.5), 1.081, places=6)
+        self.assertAlmostEqual(fill_factor(13), 0.784, places=6)
+        self.assertGreater(fill_factor(22), fill_factor(20))
 
     def test_pulse_emits_speed_power_and_split(self):
         d = Decoder()

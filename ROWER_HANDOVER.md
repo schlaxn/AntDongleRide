@@ -1,6 +1,6 @@
 # WaterRower S4 handover
 
-Status as of 3 Nov 2026. The rower work is separate from the ANT+ ride app, which is documented in `HANDOVER.md`. Calibration is running on the S4 (section 5b); the tick model is the working assumption.
+Status as of 3 Nov 2026. The rower work is separate from the ANT+ ride app, which is documented in `HANDOVER.md`. **The interface is now reverse engineered. The clean description is in `ROWER_INTERFACE.md`; this file keeps the log of how each finding was reached.** Where the two differ, `ROWER_INTERFACE.md` is newer (sections 5f and 5g below summarise the last findings).
 
 ## 1. Goal
 
@@ -12,19 +12,19 @@ Read a WaterRower S4 monitor over USB on this laptop and turn its data into live
 - Settings: 115200 baud, 8N1. This is the first rate tried and it works.
 - Handshake: `USB\r\n` gets a reply (12 to 18 bytes). This was a guess from community code and it works.
 - The port sometimes refuses to open with `PermissionError(13, 'A device attached to the system is not functioning')`. Retrying a few minutes later worked each time. The cause is unknown.
-- The monitor sends a stream of ASCII lines. Nothing is sent when the flywheel is still, apart from a `PING` once per second.
+- The monitor sends a stream of ASCII lines. Nothing is sent when the flywheel is still, apart from a `PING` once per second. (Corrected in 5f: `P0x` lines are sent only when at least one tick was counted in the 25 ms period.)
 
 ## 3. What the stream contains
 
 | Line | Meaning | Evidence |
 |---|---|---|
 | `SS` / `SE` | Stroke start / end | One pair per stroke. Marker counts match the monitor's stroke rate within about 2/min. |
-| `P01`..`P10` (hex, so `P0A` = 10, `P10` = 16) | A speed-like code | Rises smoothly with effort. About 40 lines per second, steady in every capture. |
+| `P01`..`P10` (hex, so `P0A` = 10, `P10` = 16) | A tick count: ring segments in the last 25 ms | Rises smoothly with effort. About 40 lines per second while rowing, but sparse in a slow coast (5f). |
 | `PING` | Keepalive | Once per second. |
 | `AKR` | Unknown | Seen once at startup. |
 
 What is ruled out:
-- One line per physical pulse. The line rate is fixed (about 40/s) regardless of load, so the lines are a periodic status report.
+- One line per physical pulse. The line rate is fixed (about 40/s) while rowing, regardless of load, so the lines are a periodic status report of the ticks counted in the last period (a period with no tick sends no line).
 - The code as watts directly. The fitted exponent against watts is about 0.35, not 1.
 - The code as inverse pulse period. The code only rises with effort.
 
@@ -145,10 +145,80 @@ Pass: the ticks ratio (P1) and the watts ratio at equal ticks (P2) both match th
 
 The earlier level series in `rower/measurements/level_series_protocol.md` (private, not in git) covers similar ground. Reuse its run order and notes format.
 
+## 5d. Fill-level runs (3 Nov 2026)
+
+All runs: the calibration page (`/row-cal`), demand 100 W on the monitor (3.8 m/s), recording from Start to Abort. Recordings in `recordings/rows/`.
+
+| Fill | Recording | Lock | Steady code per line | Monitor distance | Integrated (k = 2.326) | Monitor / integrated |
+|---|---|---|---|---|---|---|
+| 17 L | `cal_2026-11-03_083120_17L` | 100 W, locked at 73 s, code 8.698, k 2.289 | | | | |
+| 17 L | `cal_2026-11-03_084521_17L` | 100 W, locked at 105 s, code 8.777, k 2.310; 60 W phase skipped | about 8.8 | 814 m | 772 m (first to last stroke) | 1.054 |
+| 15 L | `cal_2026-11-03_101617_15L` | 101 W, locked at 89.5 s, code 9.13, k 2.403 | about 9.1 | 374 m | 358 m (all samples) | 1.045 |
+| 19 L | `cal_2026-11-03_101931_19L` | no lock (98 to 102 W, 100 W at end) | about 8.6 | 470 m | 464 m (all samples) | 1.012 |
+
+Derived from the steady codes at equal watts (code is proportional to (W / c)^(1/3)):
+- c15 / c17 ≈ 0.90 (confirmed on the monitor, see 5e; the code now has 0.887)
+- c19 / c17 ≈ 1.07 from an unlocked run. The monitor reading in 5e gives 1.09 to 1.10 instead, so the 1.07 was the doubtful one.
+
+Caveats: one run per level, offline numbers only (19 L did not lock), monitor watts are whole watts, and steady windows vary by a few percent. The monitor distance gap is 5.4 %, 4.5 % and 1.2 %, which does not yet show a clear fill pattern.
+
+Physics check (corrected): the physical tank is the same at every setting, so the drag is the same. The fill setting only changes the watts the monitor displays. The ticks give the real flywheel speed, and the actual power is 1.78 * v^3 with the physical constant. Taking 17 L as the setting that matches the tank, the 15 L setting displays about 9 % less than the actual power (code gives about 3.95 m/s, so about 110 W actual against 101 W shown), and the 19 L setting displays about 8 % more (about 3.72 m/s, so about 92 W actual against 100 W shown). At equal displayed watts, a lower setting therefore means higher actual work, which is why the 15 L code is higher. These numbers match the derived factors (c15/c17 about 0.90, c19/c17 about 1.07). Caveat: this assumes the 17 L setting matches the physical tank, and it relies on the 1.78 constant.
+
+17 L check of the cube law against the monitor's own table (`rower/WaterRower.csv`, private, not in git):
+- Pairs of pace (s per 500 m), m/s and monitor watts, 12 points from 2.94 to 5.38 m/s.
+- Best fit through the origin, W = K v^3: K = 1.775. The mean of measured / (1.78 v^3) is 1.009 with sd 2.7 %.
+- Free exponent on a log fit: 2.96 (3 expected).
+- The table's own expectation column equals 1.78 v^3 within 0.6 W, and its average-watt column within 0.3 W.
+- Caveat: these are the monitor's own watts, computed from its speed. The check confirms the monitor uses 1.78 v^3 at 17 L, which is the same law our demands use. It is not an independent physical measurement.
+
+## 5e. Monitor-only points: the fill factor (3 Nov 2026)
+
+Read straight from the monitor at a perfectly steady speed (no ticks, no decoder): speed in m/s and watts, then c = W / v^3.
+
+| Fill | Monitor reading | c = W / v^3 | Factor against 1.78 (17 L) |
+|---|---|---|---|
+| 15 L | 4.0 m/s, 101 W (speed rounded, about ±0.02) | 1.578 | 0.887 (±1.5 %) |
+| 17 L | the cube law, W = 1.78 v^3 | 1.78 | 1.00 |
+| 19 L | 3.72 m/s, stable; 100 W, but could have been 101 W | 1.943 to 1.962 | 1.091 to 1.102 |
+| 20 L | 3.65 m/s, 101 W, perfectly stable | 2.077 | 1.167 (±0.8 %) |
+
+- A straight line through 17 L = 1.00 with a slope of 0.054 per litre (factor = 1 + 0.054 (L - 17)) fits all the points: 15 L 0.6 % below the line, 20 L 0.4 % above. The 19 L reading is 3.72 m/s at 100 W, but the 100 could have been 101: that gives c = 1.943 or 1.962, so the factor is 1.091 or 1.102 against 1.108 on the line. The first reading of 19 L looked like a 2 % outlier only because of that ±0.5 W. So the straight line is used.
+- 18.5 L, 18 L, 13 L and beyond 20 L are not measured, only predicted by the line (13 L: 0.784, 18.5 L: 1.081).
+- This tests the fill factor, not the 1.78 itself: the monitor computes watts from its own speed. 1.78 at 17 L stays.
+- Code: `fill_factor(L) = 1 + 0.054 (L - 17)` in `rower/profiles.py` (`FILL_SLOPE_PER_L`), for any number of litres, fractions included. Effect on the demand for 100 W: 15 L asks for 3.99 m/s (was 3.83), 19 L for 3.71 m/s (was 3.75), 20 L for 3.63 m/s.
+- Not changed: `CAL_LEVELS` in `rower/calib.py` still decides which fills the calibration page accepts.
+
+Next: read the watts to the exact value at 19 L, 13 L, and a second power at one fill (60 W at 20 L) to see whether the factor holds across speed.
+
+## 5f. Distance runs from rest to rest: the sensor is a pure tick counter (3 Nov 2026)
+
+Four runs from rest to a full stop, recorded with the calibration page from Start to Abort. The ticks are the sum of every `P0x` value; the monitor's final distance was read after the flywheel stopped (whole metres).
+
+| Run | Fill | Monitor | Ticks from the first stroke | Ticks per metre |
+|---|---|---|---|---|
+| `cal_2026-11-03_115610_19L` | 19 L | 218 m | 19,989 | 91.69 ± 0.21 |
+| `cal_2026-11-03_115320_19L` | 19 L | 134 m | 12,296 (326 more before the first stroke) | 91.76 ± 0.34 |
+| `cal_2026-11-03_120203_17L` | 17 L | 124 m | 11,410 | 92.02 ± 0.37 |
+| `cal_2026-11-03_120028_17L` | 17 L | 67 m | 6,189 | 92.37 ± 0.69 |
+
+- Weighted mean **91.8 ± 0.16 ticks per metre** (10.9 mm per tick, code 2.295 per m/s at 40 lines per second). 19 L: 91.71, 17 L: 92.10. No fill dependence beyond the rounding of the monitor's whole metres.
+- The monitor counts distance **from the first stroke**, and counts the **whole coast** until the flywheel stops. Counting from time 0 gives 94.19 on the 134 m run (326 ticks before its first stroke). Counting from the second stroke or ignoring slow movement does not fit.
+- The `P0x` lines are sent only when at least one tick was counted: the smallest value in all recordings is 1, and nothing arrives at rest. In a slow coast the lines are sparse, each with a 1.
+- With the old per-line method the app reproduces the monitor on the 218 m run (217.8 m) only because two errors cancel: 2.2 % low while rowing, 15 % high in the coast (the 0.43 m/s floor of a mean of 1s). On the 134 m run it also counts the 3.7 m before the first stroke (138.8 m against 134 m). `CODE_PER_MS` was not changed.
+
+## 5g. Decision for the decoder (not implemented yet)
+
+Take speed and distance directly from the ticks, as the monitor does:
+- speed = ticks in a time window (at least 1 s, because the timestamps come in bursts) / window / 91.8;
+- distance = ticks since the first `SS` / 91.8;
+- pace = 500 / speed; watts = c(L) × speed³ with c(L) = 1.78 × (1 + 0.054 (L - 17)).
+
+The virtual landscape follows the measured distance and speed, and the display adds estimated watts and pace from the calibration. Missing: the rowing app has no setting for the fill level (`Decoder.fill_litres` stays at 17), so the watts are right only at 17 L until a fill setting is added to the row page.
+
 ## 6. Open questions
 
 1. **Averaging window.** The monitor appears to average over about 25 seconds. The 164 W ramp supports this. A clean step test would confirm it.
-2. **Linear fill effect.** Only two fill levels (17 and 19 L) have been tested, so linearity cannot be checked. The liter effect is a factor of about 1.11 at 19 L.
+2. **Linear fill effect.** 15, 17, 19 and 20 L (monitor readings, 5e) lie on a straight line, 0.054 per litre, within the reading error (the 19 L watts were 100 or 101). 13 L and 18.5 L are still unmeasured.
 3. **The 149 W run.** It was dropped. Re-run it with initial readings recorded, or accept the drop.
 4. **Code scale.** The highest code seen is `P10` (16) at 300 W. Harder efforts may go higher.
 5. **Unit behind the code.** Probably ring ticks per last period, see section 5b. Not needed for the current formula.
@@ -184,7 +254,7 @@ Nothing has been committed to git yet.
 
 1. Write unit tests for `rower/protocol.py` and `rower/profiles.py`, using lines from the captures above.
 2. Wire the `Decoder` into `RowerSerial`'s reader, so samples (`power`, `speed`, `split_500m`, `stroke_rate`) are published on the same queue as the ANT samples.
-3. Add a `rower_fill_litres` setting, and apply the 19 L factor (about 1.11) when set.
+3. Add a `rower_fill_litres` setting on the row page and apply `fill_factor(L)` (1 + 0.054 (L - 17)) when set. Still open; see 5g.
 4. Add a rower HUD page, reusing the ride app's HUD where possible.
 5. Confirm the averaging window with a sharp step test, when the user is rowing again.
 

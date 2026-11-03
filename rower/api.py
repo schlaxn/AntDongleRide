@@ -9,6 +9,7 @@ from flask import Blueprint, Response, jsonify, request, send_from_directory
 from workout import Workout
 
 from .engine import DEFAULT_TARGETS
+from .profiles import fill_factor
 from .roles import role_status
 from .serialdev import DEFAULT_BAUD, RowerError, list_ports
 
@@ -163,6 +164,27 @@ def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=N
         body = request.get_json(silent=True) or {}
         engine.set_bots(bool(body.get("on", True)))
         return jsonify({"ok": True, "on": engine.state.bots_on})
+
+    def fill_state() -> dict:
+        litres = source.decoder.fill_litres
+        return {"litres": litres, "factor": round(fill_factor(litres), 4)}
+
+    @bp.get("/api/row/fill")
+    def fill_get():
+        return jsonify({"ok": True, **fill_state()})
+
+    @bp.post("/api/row/fill")
+    def fill_set():
+        """The monitor's fill setting (15.0 to 20.0 L). It scales the displayed power from now on."""
+        body = request.get_json(silent=True) or {}
+        try:
+            litres = float(body.get("litres"))
+        except (TypeError, ValueError):
+            return err("litres must be a number between 15.0 and 20.0")
+        if not (15.0 <= litres <= 20.0):
+            return err("The monitor's fill range is 15.0 to 20.0 litres")
+        source.decoder.fill_litres = round(litres, 1)
+        return jsonify({"ok": True, **fill_state()})
 
     @bp.get("/api/row/stream")
     def stream():

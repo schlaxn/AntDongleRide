@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .profiles import CODE_PER_MS, WATT_CONST, fill_factor
 
-CAL_LEVELS = (17,)                 # first trial: 17 L only (15 and 19 L follow)
+CAL_LEVELS = (15, 17, 19, 20)      # fill levels the monitor allows (15.0 to 20.0 L)
 CAL_WATTS = (100, 60, 150)         # intended watt levels, in the order they are run
 MIN_SETTLE_S = 30.0                # nothing counts before this long after a step is shown
 MAX_STEP_S = 120.0                 # a step that never locks is offered for retry or skip
@@ -362,6 +362,10 @@ class CalRunner:
         self._q = hub.subscribe()
         self._stop = threading.Event()
         self.session = CalSession(recordings_dir)
+        self.last_code_ts: float | None = None     # monitor status, independent of the session
+        self.last_code: float | None = None
+        self.strokes_total = 0
+        self._code_ts: deque = deque(maxlen=400)
         self._thread = threading.Thread(target=self._loop, daemon=True, name="row-cal")
         self._thread.start()
 
@@ -385,25 +389,42 @@ class CalRunner:
                         continue
                     self.session.log_sample(item)
                     if item.get("metric") == "code":
+                        self.last_code_ts, self.last_code = item["ts"], item["value"]
+                        self._code_ts.append(item["ts"])
                         self.session.feed(item["ts"], item["value"])
                     elif item.get("metric") == "stroke":
+                        self.strokes_total += 1
                         self.session.feed_stroke(item["ts"])
                 self.session.tick(now)
                 if now - last_pub >= 1.0 / self.tick_hz:
                     last_pub = now
-                    self.hub.publish(self.session.snapshot(now))
+                    self.hub.publish(self._snap(now))
 
     # ---------- control (called from the web routes) ----------
+    def _snap(self, now: float) -> dict:
+        """The session snapshot plus the monitor status (valid whatever the session state)."""
+        d = self.session.snapshot(now)
+        age = None if self.last_code_ts is None else round(now - self.last_code_ts, 1)
+        rate = sum(1 for t in self._code_ts if now - t <= 2.0) / 2.0
+        d["monitor"] = {
+            "live": age is not None and age <= 2.0,
+            "age_s": age,
+            "last_code": self.last_code,
+            "lines_per_s": round(rate, 1),
+            "strokes": self.strokes_total,
+        }
+        return d
+
     def _call(self, fn, *args):
         with self._lock:
             fn(*args, time.time())
-            snap = self.session.snapshot(time.time())
+            snap = self._snap(time.time())
         self.hub.publish(snap)
         return snap
 
     def state(self) -> dict:
         with self._lock:
-            return self.session.snapshot(time.time())
+            return self._snap(time.time())
 
     def start(self, fill_l: int) -> dict:
         return self._call(self.session.start, fill_l)

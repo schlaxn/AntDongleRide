@@ -31,6 +31,18 @@ class RowApiTests(unittest.TestCase):
         self.engine.shutdown()
         self.tmp.cleanup()
 
+    def test_fill_setting_scales_the_power_from_now_on(self):
+        self.assertEqual(self.client.get("/api/row/fill").get_json()["litres"], 17)
+        r = self.client.post("/api/row/fill", json={"litres": 18.5}).get_json()
+        self.assertEqual(r["litres"], 18.5)
+        self.assertAlmostEqual(r["factor"], 1.081, places=3)
+        self.assertAlmostEqual(self.source.decoder.fill_litres, 18.5)
+        r = self.client.post("/api/row/fill", json={"litres": 25})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/row/fill", json={"litres": "x"})
+        self.assertEqual(r.status_code, 400)
+        self.assertAlmostEqual(self.source.decoder.fill_litres, 18.5)
+
     def test_state_before_and_after_start(self):
         r = self.client.get("/api/row/state")
         self.assertEqual(r.status_code, 200)

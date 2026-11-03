@@ -128,9 +128,9 @@ class CalSessionTests(unittest.TestCase):
     def test_refuses_unknown_levels(self):
         sess = CalSession()
         with self.assertRaises(ValueError):
-            sess.start(15, 0.0)
+            sess.start(16, 0.0)
         with self.assertRaises(ValueError):
-            sess.start(19, 0.0)
+            sess.start(30, 0.0)
 
     def test_three_steps_in_order_then_done_with_fit(self):
         sess = CalSession()

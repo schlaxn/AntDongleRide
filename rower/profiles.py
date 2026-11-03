@@ -9,7 +9,7 @@ CODE_PER_MS = 2.326 is a least-squares fit through the origin on seven 17 L moni
 readings. The physical unit behind the code is not identified; it is an empirical scale.
 
 The fill-level setting only changes the monitor's displayed power (about 1.07 at 19 L),
-so the displayed power sample is scaled by FILL_POWER_FACTOR. The speed sample is not.
+so the displayed power sample is scaled by fill_factor(). The speed sample is not.
 
 Samples carry devtype/devnum (ROWER_DEVTYPE, ROWER_DEVNUM) so the same role and
 recorder code that handles ANT samples can take them unchanged.
@@ -21,7 +21,11 @@ from .protocol import PULSE, STROKE_START, parse_line
 CODE_PER_MS = 2.326    # stream code per m/s (fitted, 17.0 L)
 WATT_CONST = 1.78      # cube-law constant, W per (m/s)^3 at 17.0 L
 DEFAULT_FILL_L = 17
-FILL_POWER_FACTOR = {17: 1.00, 19: 1.07}   # displayed-power factor per fill setting
+# Displayed-power factor per fill setting, relative to 17 L (c = 1.78 W per (m/s)^3 there): a straight line
+# through 17 L, 1 + 0.054 per litre. Measured on the monitor at a steady speed, c = W / v^3:
+# 15 L 1.578 (4.0 m/s, 101 W; 0.6 % below the line), 19 L 1.94 to 1.96 (3.72 m/s, 100 or 101 W; the
+# reading was not certain), 20 L 2.077 (3.65 m/s, 101 W; 0.4 % above the line).
+FILL_SLOPE_PER_L = 0.054
 ROWER_DEVTYPE = 200    # pseudo device type for the S4 in the shared sample stream
 ROWER_DEVNUM = 1
 SOURCE = "rower"
@@ -50,9 +54,9 @@ def power_from_speed(v_ms: float, watt_const: float = WATT_CONST) -> float:
     return watt_const * max(v_ms, 0.0) ** 3
 
 
-def fill_factor(litres: int) -> float:
-    """Displayed-power factor for a fill setting. Unknown settings count as 1.0."""
-    return FILL_POWER_FACTOR.get(int(litres), 1.0)
+def fill_factor(litres: float) -> float:
+    """Displayed-power factor for a fill setting (any number of litres): the straight line through 17 L."""
+    return max(0.5, 1.0 + FILL_SLOPE_PER_L * (float(litres) - 17.0))
 
 
 def split_from_speed(v_ms: float) -> float | None:
