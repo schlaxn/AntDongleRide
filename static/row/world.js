@@ -2,6 +2,7 @@
 // The scull stays at the origin; the river, banks and everything on them are placed from the
 // distance travelled, like the ride world's road. Flat colours, seeded randomness.
 import * as THREE from "/static/vendor/three.module.min.js";
+import { createCompanion } from "/static/shared/animals/companion.js";
 
 const HALF_W = 14;          // river half-width (m)
 const BANK_W = 70;          // bank width beyond the river (m)
@@ -1241,6 +1242,21 @@ export function createRowWorld(container, onFps) {
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
 
+  // A cat runs along the left bank and keeps up with the boat as well as it can (it is not as fast as
+  // a good rower: it falls behind, turns up ahead again and sets off after the boat once more).
+  const cat = createCompanion({ scale: 3, target: 14 });   // runs well ahead of the boat, where the camera sees it
+  scene.add(cat.group);
+  const CAT_LAT = -(HALF_W + 2.2);
+  function placeCat(dNow, dt) {
+    cat.update(dt, snap && snap.speed_ms ? snap.speed_ms : 0);
+    const a = dNow + cat.off;
+    const [x, z] = riverPoint(a, CAT_LAT, dNow);
+    const [x2, z2] = riverPoint(a + 1, CAT_LAT, dNow);
+    cat.group.position.set(x, BANK_Y, z);
+    cat.group.rotation.y = Math.atan2(-(x2 - x), -(z2 - z));       // the cat faces -z: turn it along the river
+    cat.group.visible = cat.off > -D_BACK && cat.off < D_AHEAD;
+  }
+
   function frame(now) {
     raf = requestAnimationFrame(frame);
     const dt = Math.min(0.1, (now - lastFrame) / 1000);
@@ -1259,6 +1275,7 @@ export function createRowWorld(container, onFps) {
     placeScenery(dispD);
     placeDolphins(dispD, sceneT, dt);
     placeExtras(dispD, sceneT);
+    placeCat(dispD, dt);
     animateBoat(performance.now());
     wake.scale.set(1, 1, 0.5 + Math.min(1.5, (snap && snap.speed_ms ? snap.speed_ms : 0) / 4));
 

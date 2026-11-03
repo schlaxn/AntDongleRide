@@ -10,6 +10,7 @@
 //  - road markings are a texture on an overlay mesh whose UVs scroll continuously with distance,
 //    so dashes glide instead of snapping from row to row
 import * as THREE from "/static/vendor/three.module.min.js";
+import { createCompanion } from "/static/shared/animals/companion.js";
 
 const D_BACK = 40, D_AHEAD = 300;
 const ROWS_D = [];
@@ -1048,6 +1049,21 @@ export function createWorld(container, onFps = () => {}) {
     e.preventDefault();
   });
 
+  // A cat runs along the right verge and keeps up with the rider as well as it can. It is not as fast
+  // as a good cyclist: it falls behind, turns up ahead again and sets off after the rider once more.
+  const cat = createCompanion({ scale: 2, target: 5 });
+  scene.add(cat.group);
+  const CAT_X = ROAD_HALF + 1.6;
+  function placeCat(dt, v, dNow) {
+    cat.update(dt, v);
+    const delta = cat.off;
+    const show = delta >= -D_BACK && delta <= D_AHEAD;
+    cat.group.visible = show;
+    if (!show) return;
+    cat.group.position.set(CAT_X, meshHeightAt(CAT_X, delta, dNow), -delta);
+    cat.group.rotation.x = Math.atan((meshHeightAt(CAT_X, delta + 1, dNow) - meshHeightAt(CAT_X, delta - 1, dNow)) / 2);
+  }
+
   function tick() {
     requestAnimationFrame(tick);
     const nowS = performance.now() / 1000;
@@ -1114,6 +1130,8 @@ export function createWorld(container, onFps = () => {}) {
     for (const e of botRigs) {
       if (e.id !== null && !listed.has(e.id)) { e.id = null; e.rig.group.visible = false; }
     }
+
+    placeCat(dt, vCur, dNow);
 
     // sun and shadows follow the riders
     sun.target.position.set(0, 0, 0);
