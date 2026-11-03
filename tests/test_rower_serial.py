@@ -104,12 +104,15 @@ class RowerSerialTest(unittest.TestCase):
         rower = RowerSerial(opener=lambda port, baud: fake)
         rower.connect("COM9", 9600)
         try:
+            self.assertEqual(fake.written, [b"USB\r\n"])      # the handshake sent on connect
+            fake.written.clear()
+            before = len([e for e in rower.events if e["dir"] == "TX"])
             rower.send(b"USB\r\n")
             self.assertEqual(fake.written, [b"USB\r\n"])
             tx = [e for e in rower.events if e["dir"] == "TX"]
-            self.assertEqual(len(tx), 1)
-            self.assertEqual(tx[0]["text"], "USB\\r\\n")
-            self.assertEqual(rower.tx_bytes, 5)
+            self.assertEqual(len(tx) - before, 1)
+            self.assertEqual(tx[-1]["text"], "USB\\r\\n")
+            self.assertEqual(rower.tx_bytes, 10)              # 5 on connect, 5 here
         finally:
             rower.disconnect()
 

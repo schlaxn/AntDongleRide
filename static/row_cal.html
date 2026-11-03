@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Row calibration</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#16232b; --muted:#5c6470; --card:#ffffff; --line:#d7dce3;
+          --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --accent:#1d4ed8; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#0f1417; --fg:#e8edf2; --muted:#9aa5b1; --card:#171e23;
+          --line:#2a3439; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#60a5fa; }
+  }
+  :root[data-theme="dark"] { --bg:#0f1417; --fg:#e8edf2; --muted:#9aa5b1; --card:#171e23;
+          --line:#2a3439; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#60a5fa; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui,sans-serif; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:4px 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:12px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .demand { font:800 96px/1 system-ui,sans-serif; letter-spacing:-2px; }
+  .demand small { font:600 22px system-ui,sans-serif; color:var(--muted); letter-spacing:0; }
+  .big { font:700 40px/1.1 system-ui,sans-serif; }
+  .muted { color:var(--muted); }
+  .phase { font-size:22px; font-weight:700; margin:8px 0; }
+  .warn { color:var(--warn); font-weight:600; }
+  .bad { color:var(--bad); font-weight:600; }
+  .ok { color:var(--ok); font-weight:700; }
+  button, select { font:600 18px system-ui,sans-serif; padding:10px 16px; border-radius:10px;
+          border:1px solid var(--line); background:var(--card); color:var(--fg); }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled, select:disabled { opacity:.45; }
+  table { width:100%; border-collapse:collapse; font-size:16px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  canvas { width:100%; height:220px; display:block; }
+  .steps { display:flex; gap:8px; }
+  .steps span { flex:1; text-align:center; padding:8px; border-radius:8px; border:1px solid var(--line); color:var(--muted); }
+  .steps span.now { border-color:var(--accent); color:var(--fg); font-weight:700; }
+  .steps span.done { color:var(--ok); }
+  .bar { height:12px; background:var(--line); border-radius:6px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0; transition:width .3s; }
+  @media (max-width:520px) { .demand { font-size:72px; } .big { font-size:30px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Calibration <span class="muted" id="levelTag"></span></h1>
+
+  <div class="card">
+    <div class="row">
+      <label class="muted">Fill
+        <select id="fill">
+          <option value="17" selected>17 L</option>
+          <option value="15" disabled>15 L (later)</option>
+          <option value="19" disabled>19 L (later)</option>
+        </select>
+      </label>
+      <button id="btnStart" class="primary">Start calibration</button>
+      <button id="btnRetry" disabled>Retry step</button>
+      <button id="btnPrev" disabled>Redo previous</button>
+      <button id="btnSkip" disabled>Skip step</button>
+      <button id="btnAbort" disabled>Abort</button>
+    </div>
+    <div class="row muted" id="sensorLine" style="margin-top:10px">S4: checking…</div>
+  </div>
+
+  <div class="card">
+    <div class="steps" id="steps"></div>
+    <div class="muted" style="margin-top:12px">Row the demanded pace on the monitor. The app needs about
+      30 s for the monitor to settle, then 5 s of steady code to lock the step.</div>
+    <div class="demand" id="demand" style="margin-top:12px">–</div>
+    <div class="row">
+      <div class="muted" id="expected" style="font:600 24px system-ui,sans-serif"></div>
+      <div class="muted" id="expectedNote"></div>
+    </div>
+    <div class="phase" id="phase">Press Start, then row the pace shown.</div>
+    <div class="bar" style="margin:8px 0"><i id="bar"></i></div>
+    <div class="row muted" id="stats"></div>
+    <div id="warn" class="warn" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:6px">Steady-state code, 3 s mean (last few minutes). The shaded band is the lock band around the current mean.</div>
+    <canvas id="trace"></canvas>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <strong>Locked steps</strong>
+      <span class="muted" id="fitLine"></span>
+    </div>
+    <table>
+      <thead><tr><th>Step</th><th>Pace</th><th>Expected W</th><th>Code</th><th>k (code per m/s)</th><th>Settled after</th><th>Locked at</th><th></th></tr></thead>
+      <tbody id="results"><tr><td colspan="8" class="muted">No steps yet.</td></tr></tbody>
+    </table>
+    <div class="muted" id="savedLine" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card" id="readingCard" hidden>
+    <div class="row">
+      <strong>Monitor pace (time / 500 m)</strong>
+      <span class="muted" id="readingFor">after a step locks</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="readingIn" type="text" inputmode="numeric" placeholder="m:ss"
+             style="font:700 28px system-ui,sans-serif;width:150px;padding:6px 10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg)">
+      <button id="btnReading" class="primary" disabled>Use monitor m/s</button>
+    </div>
+    <div class="muted" style="margin-top:6px">Read the pace the monitor shows at the end of the step (for example 2:12).
+      It becomes the reference for the fit, instead of the demanded speed.</div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let S = null;
+
+const api = async (url, body) => {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(url, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+};
+
+function fmtS(s) { return s == null ? "–" : `${Math.round(s)} s`; }
+
+function drawTrace(s) {
+  const c = $("trace"), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const pts = (s && s.trace) || [];
+  const css = getComputedStyle(document.documentElement);
+  const fg = css.getPropertyValue("--fg").trim(), line = css.getPropertyValue("--line").trim();
+  const acc = css.getPropertyValue("--accent").trim(), muted = css.getPropertyValue("--muted").trim();
+  if (!pts.length) { g.fillStyle = muted; g.font = "16px system-ui"; g.fillText("waiting for code samples…", 12, 24); return; }
+  const tMax = Math.max(60, pts[pts.length - 1][0]), tMin = Math.max(0, tMax - 240);
+  const vals = pts.filter(p => p[0] >= tMin).map(p => p[1]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const mid = (lo + hi) / 2 || 1, pad = Math.max((hi - lo) * 0.3, mid * 0.003);
+  lo -= pad; hi += pad;
+  const X = (t) => 30 + (t - tMin) / (tMax - tMin) * (w - 40);
+  const Y = (v) => h - 20 - (v - lo) / (hi - lo) * (h - 36);
+  // settle gate
+  g.strokeStyle = line; g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(X(30), 0); g.lineTo(X(30), h); g.stroke(); g.setLineDash([]);
+  // band around the latest mean
+  const last = vals[vals.length - 1];
+  if (last && s.band_pct) {
+    const b = last * s.band_pct / 100 / 2;
+    g.fillStyle = "rgba(29,78,216,0.12)";
+    g.fillRect(30, Y(last + b), w - 40, Y(last - b) - Y(last + b));
+  }
+  g.strokeStyle = acc; g.lineWidth = 2; g.beginPath();
+  pts.filter(p => p[0] >= tMin).forEach((p, i) => i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
+  g.stroke();
+  g.fillStyle = muted; g.font = "13px system-ui";
+  g.fillText("30 s gate", X(30) + 4, 14);
+  g.fillText(`${lo.toFixed(2)}`, 2, h - 22); g.fillText(`${hi.toFixed(2)}`, 2, 14);
+  g.fillStyle = fg;
+}
+
+function render(s) {
+  S = s;
+  const running = s.status === "running";
+  const idle = !running;
+  $("btnStart").disabled = running;
+  $("btnRetry").disabled = !running;
+  $("btnSkip").disabled = !running;
+  $("btnPrev").disabled = !running || (s.step || 1) < 2;
+  $("btnAbort").disabled = !running;
+  $("levelTag").textContent = s.fill_l ? `· ${s.fill_l} L` : "";
+
+  const n = s.steps || 3;
+  const doneCount = (s.results || []).length;
+  $("steps").innerHTML = Array.from({ length: n }, (_, i) => {
+    const cls = s.step === i + 1 ? "now" : (i + 1 <= doneCount ? "done" : "");
+    const mark = i + 1 <= doneCount ? " ✓" : "";
+    return `<span class="${cls}">Step ${i + 1}${mark}</span>`;
+  }).join("");
+
+  if (running && s.pace) {
+    $("demand").innerHTML = `${s.expected_w}<small> W</small>`;
+    $("expected").textContent = `${s.pace} /500 m · ${s.target_ms} m/s`;
+    $("expectedNote").textContent = `expected from the cube law at ${s.fill_l} L (an expectation, not a target)`;
+    if (s.timed_out) {
+      $("phase").textContent = "No lock within 2 minutes. Retry the step, or skip it.";
+      $("phase").className = "phase bad";
+    } else if (s.settling) {
+      $("phase").textContent = `Settling: hold ${s.expected_w} W — the monitor needs about 30 s`;
+      $("phase").className = "phase";
+    } else {
+      const left = Math.max(0, s.hold_s - s.steady_s);
+      $("phase").textContent = s.steady_s >= s.hold_s ? "Locking…" :
+        `Hold ${s.expected_w} W — steady for ${s.steady_s.toFixed(1)} of ${s.hold_s} s`;
+      $("phase").className = "phase";
+    }
+    $("bar").style.width = s.settling ? "0%" :
+      `${Math.min(100, s.steady_s / s.hold_s * 100)}%`;
+    $("stats").innerHTML = `elapsed ${fmtS(s.elapsed_s)} · mean code ${s.mean_code ?? "–"} · code age ${s.code_age_s ?? "–"} s`;
+  } else if (s.status === "done") {
+    $("demand").textContent = "Done";
+    $("expected").textContent = ""; $("expectedNote").textContent = "";
+    $("phase").textContent = "All steps locked. Results saved below.";
+    $("phase").className = "phase ok";
+    $("bar").style.width = "100%"; $("stats").textContent = "";
+  } else if (s.status === "aborted") {
+    $("demand").textContent = "Aborted";
+    $("phase").textContent = "Stopped. Locked steps so far are saved.";
+    $("phase").className = "phase warn";
+    $("bar").style.width = "0%"; $("stats").textContent = "";
+  } else {
+    $("demand").textContent = "–";
+    $("expected").textContent = ""; $("expectedNote").textContent = "";
+    $("phase").textContent = "Press Start, then row the pace shown.";
+    $("phase").className = "phase";
+    $("bar").style.width = "0%"; $("stats").textContent = "";
+  }
+
+  const offs = (s.results || []).filter(r => r.off_pace);
+  const warnings = [];
+  if (offs.length) warnings.push("A locked step is far from the nominal scale. Check the monitor shows the demanded pace, then Redo previous.");
+  if (running && s.code_age_s != null && s.code_age_s > 3) warnings.push("No code samples for a few seconds. Is the S4 connected and rowing?");
+  $("warn").textContent = warnings.join(" ");
+
+  const rows = (s.results || []).map(r => r.skipped
+    ? `<tr><td>${r.step}</td><td>${r.pace}</td><td colspan="5" class="muted">skipped</td><td></td></tr>`
+    : `<tr><td>${r.step}</td><td>${r.pace}</td><td>${r.expected_w}</td><td>${r.code}</td>` +
+      `<td>${r.k_code_per_ms}</td><td>${fmtS(r.settle_s)}</td><td>${fmtS(r.lock_s)}</td>` +
+      `<td class="${r.off_pace ? "warn" : "ok"}">${r.off_pace ? "check pace" : "locked"}</td></tr>`);
+  $("results").innerHTML = rows.length ? rows.join("") :
+    `<tr><td colspan="8" class="muted">No steps yet.</td></tr>`;
+  $("fitLine").textContent = s.fit
+    ? `fit ${s.fit.fill_l} L: code/(m/s) = ${s.fit.code_per_ms} (nominal ${s.fit.nominal_code_per_ms}, ${s.fit.deviation_pct >= 0 ? "+" : ""}${s.fit.deviation_pct} %)`
+    : "";
+  $("savedLine").textContent = s.saved_to ? `Saved: ${s.saved_to}` : "";
+  const last = (s.results || []).slice(-1)[0];
+  $("btnReading").disabled = !s.awaiting_reading;
+  $("readingFor").textContent = s.awaiting_reading
+    ? `for step ${last.step} (${last.target_w} W, ${last.pace})`
+    : (last && !last.skipped ? `step ${last.step}: reading ${last.monitor_ms ?? "–"} m/s` : "after a step locks");
+  drawTrace(s);
+}
+
+async function act(fn) {
+  try { render(await fn()); } catch (e) { alert(e.message); }
+}
+
+$("btnStart").onclick = () => act(() => api("/api/row/cal/start", { fill_l: +$("fill").value }));
+$("btnRetry").onclick = () => act(() => api("/api/row/cal/retry", {}));
+$("btnSkip").onclick = () => act(() => api("/api/row/cal/skip", {}));
+$("btnPrev").onclick = () => act(() => api("/api/row/cal/redo-previous", {}));
+// the monitor's pace (m:ss per 500 m) becomes speed: v = 500 / pace
+function parsePace(text) {
+  const m = /^\s*(\d+):(\d{1,2})\s*$/.exec(text || "");
+  if (!m) return null;
+  const sec = (+m[1]) * 60 + (+m[2]);
+  return sec > 0 ? 500 / sec : null;
+}
+$("btnReading").onclick = () => {
+  const v = parsePace($("readingIn").value);
+  if (!(v > 0.5 && v < 10)) { alert("Enter the monitor's pace as m:ss, for example 2:12."); return; }
+  act(() => api("/api/row/cal/reading", { speed_ms: v }));
+};
+$("btnAbort").onclick = () => { if (confirm("Abort the calibration? Locked steps are saved.")) act(() => api("/api/row/cal/abort", {})); };
+
+async function pollSensors() {
+  try {
+    const j = await (await fetch("/api/row/sensors")).json();
+    const r = j.roles && j.roles.rower;
+    $("sensorLine").innerHTML = r && r.live
+      ? `<span class="ok">S4 live</span>`
+      : `<span class="warn">S4 not live</span> — connect it on <a href="/row">/row</a> first`;
+  } catch (_) { $("sensorLine").textContent = "S4: status unavailable"; }
+}
+
+function connect() {
+  const es = new EventSource("/api/row/stream");
+  es.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "cal") render(m);
+  };
+}
+
+(async () => {
+  render(await (await fetch("/api/row/cal/state")).json().catch(() => ({ status: "idle" })));
+  connect();
+  pollSensors(); setInterval(pollSensors, 2000);
+  window.addEventListener("resize", () => drawTrace(S));
+})();
+</script>
+</body>
+</html>

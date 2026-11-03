@@ -13,9 +13,61 @@ from .roles import role_status
 from .serialdev import DEFAULT_BAUD, RowerError, list_ports
 
 
-def make_blueprint(engine, hub, source, roles, static_dir, simulator=None) -> Blueprint:
+def make_blueprint(engine, hub, source, roles, static_dir, simulator=None, cal=None) -> Blueprint:
     bp = Blueprint("row", __name__)
     ble_state = {"hr": None}
+
+    def cal_call(method: str, *args):
+        if cal is None:
+            return err("Calibration is not available in this build", 503)
+        try:
+            return jsonify({"ok": True, **getattr(cal, method)(*args)})
+        except (RuntimeError, ValueError) as exc:
+            return err(str(exc), 409)
+
+    @bp.get("/row-cal")
+    def cal_page():
+        return send_from_directory(static_dir, "row_cal.html")
+
+    @bp.get("/api/row/cal/state")
+    def cal_state():
+        if cal is None:
+            return err("Calibration is not available in this build", 503)
+        return jsonify(cal.state())
+
+    @bp.post("/api/row/cal/start")
+    def cal_start():
+        body = request.get_json(silent=True) or {}
+        try:
+            fill = int(body.get("fill_l", 17))
+        except (TypeError, ValueError):
+            return err("fill_l must be a whole number of litres")
+        return cal_call("start", fill)
+
+    @bp.post("/api/row/cal/retry")
+    def cal_retry():
+        return cal_call("retry")
+
+    @bp.post("/api/row/cal/skip")
+    def cal_skip():
+        return cal_call("skip")
+
+    @bp.post("/api/row/cal/redo-previous")
+    def cal_redo():
+        return cal_call("redo_previous")
+
+    @bp.post("/api/row/cal/abort")
+    def cal_abort():
+        return cal_call("abort")
+
+    @bp.post("/api/row/cal/reading")
+    def cal_reading():
+        body = request.get_json(silent=True) or {}
+        try:
+            speed = float(body.get("speed_ms"))
+        except (TypeError, ValueError):
+            return err("speed_ms must be a number (the monitor's m/s)")
+        return cal_call("reading", speed)
 
     @bp.get("/api/row/sim")
     def sim_status():

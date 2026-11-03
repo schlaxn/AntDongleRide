@@ -117,6 +117,8 @@ class RowerSerial:
         self._thread = threading.Thread(target=self._reader, daemon=True, name="rower-reader")
         self._thread.start()
         self._event(f"connected to {port} at {baud} baud")
+        # the S4 streams only after the handshake (see ROWER_HANDOVER.md, section 2)
+        self.send(b"USB\r\n")
         return self.info()
 
     def disconnect(self) -> None:

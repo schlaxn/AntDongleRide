@@ -8,16 +8,19 @@ import random
 import threading
 import time
 
-from .profiles import ROWER_DEVNUM, ROWER_DEVTYPE, WATT_CONST, Sample
+from .profiles import CODE_PER_MS, ROWER_DEVNUM, ROWER_DEVTYPE, WATT_CONST, Sample
 
 BLE_HR_DEVTYPE = 120
 BLE_HR_DEVNUM = -1
+CAL_TAU_S = 10.0       # the simulated flywheel follows a calibration demand with this lag
+CAL_NOISE = 0.01       # per-line code noise (fraction), as seen on the real stream
 
 
 class SimulatedRower:
-    def __init__(self, hub, engine, seed: int = 1, tick_s: float = 0.1):
+    def __init__(self, hub, engine, seed: int = 1, tick_s: float = 0.1, calib=None):
         self.hub = hub
         self.engine = engine
+        self.calib = calib     # CalRunner, when calibration is in use: its demanded pace drives the code
         self.rng = random.Random(seed)
         self.tick_s = tick_s
         self._stop = threading.Event()
@@ -25,6 +28,7 @@ class SimulatedRower:
         self._hr = 70.0
         self._next_stroke: float | None = None
         self._last_hr_ts = 0.0
+        self._cal_v = 0.0
 
     @property
     def running(self) -> bool:
@@ -53,6 +57,16 @@ class SimulatedRower:
     def _run(self) -> None:
         while not self._stop.is_set():
             now = time.time()
+            demand = self.calib.demand_speed() if self.calib is not None else None
+            if demand is not None:
+                # calibration: the flywheel follows the demanded pace with a lag; the stream
+                # carries the code, as the S4 does
+                self._cal_v += (demand - self._cal_v) * min(1.0, self.tick_s / CAL_TAU_S)
+                noisy = self._cal_v * CODE_PER_MS * (1.0 + self.rng.uniform(-CAL_NOISE, CAL_NOISE))
+                self.hub.ingest_sample(Sample(now, "code", int(round(noisy)), "code",
+                                              devtype=ROWER_DEVTYPE, devnum=ROWER_DEVNUM))
+            else:
+                self._cal_v = 0.0
             watts = self._effort_w()
             v = (watts / WATT_CONST) ** (1.0 / 3.0) if watts > 0 else 0.0
             if v > 0:

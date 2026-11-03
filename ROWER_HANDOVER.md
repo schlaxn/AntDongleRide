@@ -1,6 +1,6 @@
 # WaterRower S4 handover
 
-Status as of 2 Nov 2026. The rower work is separate from the ANT+ ride app, which is documented in `HANDOVER.md`.
+Status as of 3 Nov 2026. The rower work is separate from the ANT+ ride app, which is documented in `HANDOVER.md`. Calibration is running on the S4 (section 5b); the tick model is the working assumption.
 
 ## 1. Goal
 
@@ -88,13 +88,70 @@ For biking the split is the opposite. Power is the primary measurement, from the
 
 The displayed speed, split and power are smoothed. Steady efforts show a 10-second average. A deliberate change (more than 10% for 1.5 s) shows the 2-second average instead, so intervals appear within about 2–3 seconds (`display()` in `rower/engine.py`). The physics and the distance use the raw values.
 
+## 5b. Working model (3 Nov 2026): the code is a tick count
+
+Working hypothesis: each `P0x` line carries the number of ring ticks counted in the last period, so the code is proportional to flywheel speed. Not proven yet, but the data so far fit it.
+
+Evidence:
+- **Spin-down.** After the last stroke (session `recordings/rows/cal_2026-11-03_084521_17L`, t = 225 s) the code falls smoothly from about 8 to 2.2 over 10 s and never rises. Values stay integers (2 to 9). An earlier note in this file said the code rose during stops; that was the monitor's averaged m/s, not the code.
+- **Proportional to speed.** Steady phases at 3.8 m/s (100 W, code 8.74 per line) and 3.2 m/s (60 W, code about 7.4) both give code / v = 2.31 per m/s.
+- **Stroke-to-stroke jitter.** At a steady 100 W, the 36 stroke-cycle means have sd 0.22 (2.5 %). Per line the sd is 1.03, far above the 0.29 that integer rounding alone would give, so tick timing within a line varies strongly.
+- **Low-speed hand counts.** 21 revolutions in 30 s at 0 W (code 2.19) gives 3.13 code per rev/s. 24 revolutions in 30 s under 20 W (code 2.35) gives 2.94. Mean about 3.0.
+
+Ticks per revolution: code per (rev/s) = N x (seconds per line), so N = 3.0 x line rate. At 35 to 40 lines/s, N = 105 to 120 ticks per revolution. This session measured 40 lines/s, so N is about 120. Self-check: at 0.7 rev/s and N = 120, a 40/s line carries 2.1 ticks, which matches the 2.19 measured.
+
+If the model holds:
+- Speed = code / 2.31 (code per m/s). This is the calibration constant, and the 1.78 cube law stays a drag constant per fill level.
+- At 19 L the same speed gives the same code but more watts, which fits the 19 L table (ratio about 1.11).
+- Distance from integrated speed at 2.31 is about 778 m for the 814 m monitor session, a gap of about 4.5 %. Not explained yet (boat model or session boundaries).
+
+Open:
+1. Check N with a counted interval at higher speed (a constant-speed flywheel count by hand).
+2. Power check with monitor watts at steady phases: v = code / 2.31, c = W / v^3. At 98 W, c = 1.77. At about 60 W, c = 1.77 to 1.89 depending on the exact watts. 1.78 is consistent.
+3. Steady phases at 15 L and 19 L to get the drag ratio.
+4. Lock detection: the 60 W phase did not lock at any band from 2 % to 5 % with 5 s or 10 s holds. Stroke-to-stroke noise is wider than the band, so the detector needs a rethink.
+
+### Conclusions (3 Nov, later)
+
+- **The stream is raw ring-segment counts.** Most likely each `P0x` line is the number of ring segments counted in the last period, with no further decoding needed. The 120 segments per revolution is an assumption and is not critical.
+- **Two conversion factors matter.** Both are ring segments per interval, one per quantity:
+  - speed: `v = ticks / K_v`, where K_v is about 2.31 ticks per line per m/s at 17 L (fitted from the steady phases);
+  - power: `W = c * v^3`, with `v = ticks / K_v` and c = 1.78 at 17 L. The power is therefore `W = c * (ticks / K_v)^3`, and the cube law is already known.
+- **Resolution.** One tick in about 600 per stroke is about 0.17 % in speed and about 0.5 % in power, which is finer than the monitor's 1 W steps. The stroke-to-stroke spread at a steady 100 W is 2.5 %, so it comes from the real stroke, not from counting.
+- **Blade ripple.** The 6 Hz blade-pass ripple was a hypothesis and is not in the data. The 5.34 Hz peak in the steady 100 W phase is unexplained.
+
+## 5c. Test plan: confirm the tick model (for later)
+
+Goal: confirm three things. (1) The `P0x` value is a raw ring-segment count per line. (2) The ticks-to-speed factor K_v does not depend on the fill level. (3) Only the watts-per-speed constant c changes with the tank, following W = c * v^3.
+
+Setup:
+- Fill levels 15 L, 17 L and 19 L. Change the level only while stopped.
+- Demand 100 W on the monitor, using the same speed demand as the calibration page (3.8 m/s). Hold it for at least 2 minutes per level, with the natural stroke rate (about 34 strokes per minute).
+- Record with the calibration page, which logs every sample from Start to Abort. Press Abort after the last stroke.
+- No values are entered while rowing. After each phase, write the monitor's watts and pace in a notes file.
+
+Predictions if the hypothesis holds:
+- P1: at a fixed 100 W on the monitor, ticks per line change with the fill level. Expected 19 L / 17 L ratio: (1 / 1.11)^(1/3) = 0.966 using the measured factor, or (1 / 1.07)^(1/3) = 0.978 using the current code factor.
+- P2: at a fixed speed (the same ticks per line), the monitor's watts scale with c. Expected W(19 L) / W(17 L) = 1.11 (or 1.07).
+- P3: ticks per stroke show the same stroke-to-stroke spread at every level (about 2.5 % at 17 L).
+- P4 (optional): ticks per stroke divided by revolutions per stroke gives N, the ring segments per revolution.
+
+Analysis:
+- Take K_v from the 17 L phase, using the pace reference or the cube-law speed.
+- For each level, compute v_i = ticks_i / K_v and c_i = W_i / v_i^3, then compare the ratios c_i / c_17 with P1 and P2.
+- A monitor watt reading is good to about 1 W, so c is good to about 1 % at 100 W.
+
+Pass: the ticks ratio (P1) and the watts ratio at equal ticks (P2) both match their predictions within about 1 %. Any other pattern means the raw value is not a speed-only count, and the model must be revisited. A short step test at 60 W can follow once 100 W is confirmed.
+
+The earlier level series in `rower/measurements/level_series_protocol.md` (private, not in git) covers similar ground. Reuse its run order and notes format.
+
 ## 6. Open questions
 
 1. **Averaging window.** The monitor appears to average over about 25 seconds. The 164 W ramp supports this. A clean step test would confirm it.
 2. **Linear fill effect.** Only two fill levels (17 and 19 L) have been tested, so linearity cannot be checked. The liter effect is a factor of about 1.11 at 19 L.
 3. **The 149 W run.** It was dropped. Re-run it with initial readings recorded, or accept the drop.
 4. **Code scale.** The highest code seen is `P10` (16) at 300 W. Harder efforts may go higher.
-5. **Unit behind the code.** Unresolved. Not needed for the formula.
+5. **Unit behind the code.** Probably ring ticks per last period, see section 5b. Not needed for the current formula.
 
 ## 7. Files
 
@@ -109,6 +166,10 @@ Phase 0 (working and tested):
 Phase 1 (written, not yet tested or wired in):
 - `rower/protocol.py`: classifies each line into `SS`, `SE`, `PING`, `P0x` (with decimal value) or `OTHER`.
 - `rower/profiles.py`: stateful `Decoder` turning `P0x` codes into power, speed, split and stroke rate. It uses a 20-line rolling mean for the code.
+- `rower/calib.py`: fill-level calibration. Demands from the watt levels (100, 60, 150 W) through the cube law, rounded to 0.1 m/s. Steady-state detection on stroke-cycle means. Logs every rower sample from Start to the end.
+- `static/row_cal.html`: calibration page at `/row-cal`. Watts big, pace small. Start, Retry, Skip, Redo previous, Abort.
+- `tests/test_rower_cal.py`: tests for the detector and session (19 tests).
+- Calibration output: `recordings/rows/cal_<time>_17L/` with `samples.csv` (full log), `trace.csv` (code per step) and `cal.json` (results).
 
 Captures (session scratch folder, temporary; copy them into the repo if they need to be kept):
 `C:\Users\JSCHLA~1\AppData\Local\Temp\claude\E--jschlager-Documents-Projects-AntDongle\5a08b3f1-a633-4282-bab1-e213783d4dc5\scratchpad\`
@@ -153,3 +214,4 @@ Not yet built (from the plan):
 - Hand-counted revolutions are only reliable below about 40 per 30 seconds.
 - Don't ask for more rowing without a reason. The user has said they are done for the day.
 - Don't publish artifacts. The timer and counter pages are local files in the scratch folder.
+- Never ask the rower to type values while rowing. Detection is automatic, and the rower is assumed to hold the demanded speed.

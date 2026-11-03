@@ -80,6 +80,7 @@ class Decoder:
         out: list[Sample] = []
 
         if kind == PULSE and value is not None:
+            out.append(Sample(ts, "code", value, "code"))   # raw per-line code, for calibration
             self._codes.append(value)
             if len(self._codes) > self._window:
                 del self._codes[0]

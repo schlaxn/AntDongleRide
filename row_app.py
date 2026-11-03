@@ -12,6 +12,7 @@ from pathlib import Path
 from flask import Flask
 
 from rower.api import make_blueprint
+from rower.calib import CalRunner
 from rower.engine import RowEngine
 from rower.hub import RowHub
 from rower.profiles import Decoder
@@ -31,9 +32,10 @@ roles = RowRoles()
 engine = RowEngine(hub, RECORDINGS, roles)
 serial = RowerSerial()
 source = RowerSource(serial, hub, Decoder())
-simulator = SimulatedRower(hub, engine)   # started from the sensor dialog or --simulate
+cal = CalRunner(hub, roles, RECORDINGS)  # fill calibration, one level at a time (17 L first)
+simulator = SimulatedRower(hub, engine, calib=cal)   # started from the sensor dialog or --simulate
 
-app.register_blueprint(make_blueprint(engine, hub, source, roles, STATIC, simulator))
+app.register_blueprint(make_blueprint(engine, hub, source, roles, STATIC, simulator, cal))
 app.register_blueprint(rower_debug_bp)  # raw serial debug page: /rower-debug
 
 

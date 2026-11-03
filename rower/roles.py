@@ -10,6 +10,7 @@ ROLE_TYPES = {"heart_rate": (120,), "rower": (200,)}
 ROLE_OF_METRIC = {
     "heart_rate": "heart_rate",
     "speed": "rower",
+    "code": "rower",
     "stroke": "rower",
     "stroke_rate": "rower",
     "power": "rower",

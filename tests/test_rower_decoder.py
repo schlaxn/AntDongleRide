@@ -44,7 +44,7 @@ class DecoderTests(unittest.TestCase):
         d = Decoder()
         out = d.decode_line("P0A", 1.0)
         metrics = {s.metric for s in out}
-        self.assertEqual(metrics, {"speed", "power", "split_500m"})
+        self.assertEqual(metrics, {"code", "speed", "power", "split_500m"})
         speed = next(s for s in out if s.metric == "speed")
         self.assertEqual((speed.devtype, speed.devnum), (200, 1))
 
