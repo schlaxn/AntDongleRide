@@ -9,7 +9,7 @@ Binds to localhost only. The ride app (app.py, port 5000) is untouched.
 import argparse
 from pathlib import Path
 
-from flask import Flask
+from flask import Flask, send_from_directory
 
 from rower.api import make_blueprint
 from rower.calib import CalRunner
@@ -37,6 +37,12 @@ simulator = SimulatedRower(hub, engine, calib=cal)   # started from the sensor d
 
 app.register_blueprint(make_blueprint(engine, hub, source, roles, STATIC, simulator, cal))
 app.register_blueprint(rower_debug_bp)  # raw serial debug page: /rower-debug
+
+
+@app.get("/zoo")
+def zoo():
+    """Animal viewer: one animal on its own, to check the models and animations."""
+    return send_from_directory(STATIC, "zoo.html")
 
 
 if __name__ == "__main__":
