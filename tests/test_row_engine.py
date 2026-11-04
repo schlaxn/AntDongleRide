@@ -31,17 +31,17 @@ class RowStateTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             RowState(short_workout()).pause()
 
-    def test_clock_and_distance_move_only_while_running(self):
+    def test_clock_moves_only_while_running_distance_also_in_preview(self):
         st = RowState(short_workout())
         t = 100.0
         st.update("speed", t, 4.0)
-        st.advance(t, 0.5)                   # preview: physics only
+        st.advance(t, 0.5)                   # preview: the boat covers the distance it rows, the clock stays
         self.assertEqual(st.elapsed, 0.0)
-        self.assertEqual(st.distance_m, 0.0)
-        st.start()
+        self.assertAlmostEqual(st.distance_m, 2.0)
+        st.start()                           # the session starts from the distance covered in preview
         st.advance(t + 0.5, 0.5)
         self.assertAlmostEqual(st.elapsed, 0.5)
-        self.assertAlmostEqual(st.distance_m, 2.0)
+        self.assertAlmostEqual(st.distance_m, 4.0)   # 2 m from preview, 2 m while running
         st.pause()
         st.advance(t + 1.0, 0.5)
         self.assertAlmostEqual(st.elapsed, 0.5)

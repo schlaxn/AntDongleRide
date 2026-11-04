@@ -3,6 +3,7 @@
 // distance travelled, like the ride world's road. Flat colours, seeded randomness.
 import * as THREE from "/static/vendor/three.module.min.js";
 import { createCompanion } from "/static/shared/animals/companion.js";
+import { makeMouse } from "/static/shared/animals/mouse.js";
 
 const HALF_W = 14;          // river half-width (m)
 const BANK_W = 70;          // bank width beyond the river (m)
@@ -29,10 +30,14 @@ const smoothstep = (x) => { const t = Math.min(1, Math.max(0, x)); return t * t 
 // Heading (radians, 0 = straight away from the boat). Straights and corners alternate;
 // each corner is a smooth turn of CORNER_M metres between two straights.
 // heading at each node, from the node number alone: the river never runs out
+const _nodeH = [];   // each node's heading is computed once: the hash is the same every time
 const nodeH = (k) => {
   if (k === 0) return 0;                          // the river is straight through the start line
-  const sign = hash(k + 900) < 0.5 ? -1 : 1;
-  return sign * (0.35 + hash(k + 910) * 0.6) * (hash(k + 920) < 0.25 ? 0 : 1);
+  if (_nodeH[k] === undefined) {
+    const sign = hash(k + 900) < 0.5 ? -1 : 1;
+    _nodeH[k] = sign * (0.35 + hash(k + 910) * 0.6) * (hash(k + 920) < 0.25 ? 0 : 1);
+  }
+  return _nodeH[k];
 };
 function headingAt(a) {
   const k = Math.floor(a / NODE_EVERY);
@@ -158,6 +163,13 @@ function beam(mesh, a, b) {
   mesh.scale.set(1, len, 1);
 }
 
+// Debug options from the page URL (see VIEWS below): cam, zoom, t (stroke phase 0-1), d (distance in m)
+const DBG = (() => {
+  const q = new URLSearchParams(location.search);
+  const num = (k) => (q.has(k) && isFinite(parseFloat(q.get(k))) ? parseFloat(q.get(k)) : null);
+  return { cam: q.get("cam"), zoom: num("zoom"), t: num("t"), d: num("d") };
+})();
+
 export function createRowWorld(container, onFps) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
@@ -173,7 +185,8 @@ export function createRowWorld(container, onFps) {
   // sunlight from the upper left, casting shadows around the boat (the scene is rider-relative,
   // so the shadow box stays centred on the scull)
   const sun = new THREE.DirectionalLight(0xfff1d6, 1.6);
-  sun.position.set(-30, 60, -20);
+  const sunAbs = new THREE.Vector3(0, 60, -20);   // fixed in the world: straight up and ahead
+  sun.position.copy(sunAbs);
   scene.add(sun);
   scene.add(sun.target);
   scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x5a6b3a, 0.9));
@@ -181,10 +194,55 @@ export function createRowWorld(container, onFps) {
   const lam = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
   const dummy = new THREE.Object3D();
 
+  // ---------- water: a procedural, animated texture on a lit material ----------
+  // The water pattern moves along the river with the time, so the river flows even when the scull
+  // is still. Each vertex carries aFlow = (across: 0 left edge .. 1 right edge, along: absolute metres).
+  // uFlip sets the direction: +1 downstream (the river), -1 towards the river (a stream).
+  const waterTime = { value: 0 };
+  const WATER_BLUE = 0x1f6fd1;   // one blue for the river and the streams
+  // normals straight up for the water and the banks: recomputing them every frame costs more than the frame
+  const upNormals = (n) => { const a = new Float32Array(n * 3); for (let i = 0; i < n; i++) a[i * 3 + 1] = 1; return new THREE.BufferAttribute(a, 3); };
+  function makeWater(flip, color = COLORS.water) {
+    const mat = lam(color, { side: THREE.DoubleSide });
+    mat.customProgramCacheKey = () => `water-${flip}`;
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = waterTime;
+      sh.uniforms.uFlip = { value: flip };
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute vec2 aFlow;\nvarying vec2 vFlow;")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFlow = aFlow;");
+      sh.fragmentShader = sh.fragmentShader
+        .replace("#include <common>", `#include <common>
+uniform float uTime;
+uniform float uFlip;
+varying vec2 vFlow;
+float hsh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hsh(i), hsh(i + vec2(1.0, 0.0)), f.x), mix(hsh(i + vec2(0.0, 1.0)), hsh(i + vec2(1.0, 1.0)), f.x), f.y);
+}`)
+        .replace("#include <color_fragment>", `#include <color_fragment>
+{
+  float t = uTime * 0.15;   // about 0.33 m/s: the water drifts slowly, well below rowing speed
+  vec2 q = vec2(vFlow.x * 10.0, vFlow.y * 0.45 - uFlip * t);   // the pattern moves with the water
+  float n = 0.6 * vnoise(q) + 0.4 * vnoise(q * 2.0 + vec2(7.1, 3.3));
+  float sheen = smoothstep(0.62, 0.9, n);
+  diffuseColor.rgb *= 0.9 + 0.2 * n;
+  diffuseColor.rgb += sheen * vec3(0.10, 0.12, 0.12);
+}`);
+    };
+    return mat;
+  }
+
   // ---------- river and banks: ribbons rebuilt every frame ----------
   const ROWS = Math.round((D_BACK + D_AHEAD) / ROW_STEP) + 1;
   const riverGeo = new THREE.BufferGeometry();
   const riverPos = new Float32Array(ROWS * 2 * 3);
+  const riverFlow = new Float32Array(ROWS * 2 * 2);
+  const riverFlowAttr = new THREE.BufferAttribute(riverFlow, 2);
+  riverGeo.setAttribute("aFlow", riverFlowAttr);
+  riverGeo.setAttribute("normal", upNormals(ROWS * 2));
   const riverIdx = [];
   for (let r = 0; r < ROWS - 1; r++) {
     const a = r * 2, b = a + 1, c = a + 2, d = a + 3;
@@ -192,35 +250,49 @@ export function createRowWorld(container, onFps) {
   }
   riverGeo.setIndex(riverIdx);
   riverGeo.setAttribute("position", new THREE.BufferAttribute(riverPos, 3));
-  const river = new THREE.Mesh(riverGeo, lam(COLORS.water, { side: THREE.DoubleSide }));
+  const river = new THREE.Mesh(riverGeo, makeWater(1, WATER_BLUE));
   river.frustumCulled = false;
   river.receiveShadow = true;
   scene.add(river);
 
-  // per row and side: [water's edge, top of the 45-degree slope, outer edge of the flat bank]
-  const bankPos = new Float32Array(ROWS * 6 * 3);
+  // per row and side: the bank sampled across at BANK_LAT (metres from the water's edge), so a stream
+  // can cut the bank down to the water over its own width
+  const BANK_LAT = [0, 0.5, 1, 2, 3.5, 6, 9, 13, 18, 25, 35, 50, 70];
+  const NS = BANK_LAT.length;
+  const bankPos = new Float32Array(ROWS * 2 * NS * 3);
   const bankIdx = [];
   for (let r = 0; r < ROWS - 1; r++) {
     for (const side of [0, 1]) {
-      const o = r * 6 + side * 3, n = o + 6;
-      bankIdx.push(o, o + 1, n, o + 1, n + 1, n);                   // the slope
-      bankIdx.push(o + 1, o + 2, n + 1, o + 2, n + 2, n + 1);       // the flat top
+      for (let k = 0; k < NS - 1; k++) {
+        const base = (r * 2 + side) * NS + k;                       // this row's sample k
+        const a = base, b = base + 1, c = base + 2 * NS + 1, d = base + 2 * NS;   // the next row's samples
+        // the left bank is mirrored, so its triangles are wound the other way; with DoubleSide a face wound
+        // away from the camera has its normal flipped, which is why the left bank came out dark
+        if (side === 0) bankIdx.push(a, c, b, a, d, c);
+        else bankIdx.push(a, b, c, a, c, d);
+      }
     }
   }
   const bankGeo = new THREE.BufferGeometry();
   bankGeo.setIndex(bankIdx);
   bankGeo.setAttribute("position", new THREE.BufferAttribute(bankPos, 3));
+  bankGeo.setAttribute("normal", upNormals(ROWS * 2 * NS));
   const banks = new THREE.Mesh(bankGeo, lam(COLORS.bank, { side: THREE.DoubleSide }));
   banks.frustumCulled = false;
   banks.receiveShadow = true;
   scene.add(banks);
+
+  // the far background (land and mountains) sits in one group that turns about the scull with the
+  // river's heading, so the horizon swings round in a bend. It does not move along the river.
+  const horizon = new THREE.Group();
+  scene.add(horizon);
 
   // the land beyond the banks, running to the horizon (below the river and bank ribbons)
   const landGeo = new THREE.PlaneGeometry(3000, 3000);
   landGeo.rotateX(-Math.PI / 2);
   const land = new THREE.Mesh(landGeo, lam(COLORS.bank, { side: THREE.DoubleSide }));
   land.position.set(0, -0.05, -900);
-  scene.add(land);
+  horizon.add(land);
 
   // ---------- trees ----------
   const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 2.4, 12), lam(COLORS.trunk), TREE_MAX);
@@ -477,6 +549,94 @@ export function createRowWorld(container, onFps) {
     boathouses.push({ g, d: 300 + i * 420, lat: -(HALF_W + 10) });
   }
 
+  // ---------- anglers: one on the left bank by each boathouse, fishing into the river ----------
+  // Seated on a folding chair at the top of the bank, facing the water, with a rod and a red float.
+  // Every ANGLER_PERIOD seconds: the float dips on a bite, a fish leaps out of the water and is hooked,
+  // hangs from the rod tip, and is gone. Local +x faces the river.
+  const ANGLER_PERIOD = 14;
+  const unitCyl = new THREE.CylinderGeometry(0.03, 0.03, 1, 6);     // beam(): stretched between two points
+  const unitArm = new THREE.CylinderGeometry(0.05, 0.05, 1, 6);
+  const mShirt = lam(0x3b5b7a), mTrousers = lam(0x2e3a46), mSkin = lam(COLORS.skin), mHat = lam(0x7a5a3a);
+  const mChair = lam(0x2b2b2b), mRod = lam(0x3a2a1a), mLine = lam(0xdddddd), mFloat = lam(0xe5484d), mFish = lam(0xf08c2a);
+  const ROD_TIP = new THREE.Vector3(4.6, 1.5, 0.1);
+  const BOBBER_REST = new THREE.Vector3(5.5, -0.95, 0.1);           // on the water (the water is 1.0 m below the bank top)
+  const anglers = boathouses.map((bh, j) => {
+    const g = new THREE.Group();
+    const add = (geo, mat, x, y, z, rx = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z); m.rotation.set(rx, 0, rz); g.add(m); return m;
+    };
+    // folding chair: seat, back and four legs
+    add(new THREE.BoxGeometry(0.8, 0.08, 0.7), mChair, 0, 0.48, 0);
+    add(new THREE.BoxGeometry(0.08, 0.7, 0.7), mChair, -0.36, 0.84, 0);
+    for (const x of [0.3, -0.3]) for (const z of [-0.28, 0.28]) add(new THREE.BoxGeometry(0.06, 0.48, 0.06), mChair, x, 0.24, z);
+    // legs in trousers: thighs forward from the hips, shins down to the boots
+    for (const z of [-0.17, 0.17]) {
+      add(new THREE.BoxGeometry(0.6, 0.16, 0.2), mTrousers, 0.3, 0.6, z);
+      add(new THREE.BoxGeometry(0.16, 0.55, 0.2), mTrousers, 0.6, 0.33, z);
+    }
+    // torso leaning towards the river, head and hat
+    add(new THREE.CylinderGeometry(0.2, 0.22, 0.7, 10), mShirt, 0.05, 1.05, 0, 0, -0.2);
+    add(new THREE.SphereGeometry(0.16, 12, 10), mSkin, 0.14, 1.6, 0);
+    add(new THREE.CylinderGeometry(0.24, 0.24, 0.04, 12), mHat, 0.14, 1.72, 0);
+    add(new THREE.CylinderGeometry(0.14, 0.14, 0.14, 10), mHat, 0.14, 1.8, 0);
+    // arms: both hands on the rod
+    const hands = [new THREE.Vector3(0.5, 1.15, 0.1), new THREE.Vector3(0.5, 1.15, -0.1)];
+    for (const h of hands) {
+      const arm = new THREE.Mesh(unitArm, mShirt);
+      beam(arm, new THREE.Vector3(0.05, 1.36, Math.sign(h.z) * 0.2), h);
+      g.add(arm);
+    }
+    // rod from the hands to the tip, the line down to the float, the float on the water, a fish
+    const rod = new THREE.Mesh(unitCyl, mRod);
+    beam(rod, hands[0], ROD_TIP);
+    g.add(rod);
+    const bobber = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), mFloat);
+    bobber.position.copy(BOBBER_REST);
+    g.add(bobber);
+    const line = new THREE.Mesh(unitCyl, mLine);
+    g.add(line);
+    const fish = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mFish);
+    fish.scale.set(0.22, 0.1, 0.07);
+    fish.visible = false;
+    g.add(fish);
+    scene.add(g);   // visible only when placeAnglers puts it in range
+    return { g, bh, off: hash(j + 1500) * ANGLER_PERIOD, bobber, line, fish };
+  });
+  function placeAnglers(dNow, t) {
+    for (const an of anglers) {
+      // one per boathouse, 25 m along from it, on the bank 2.5 m out from the water's edge
+      const rel = wrapRel(an.bh.d + 25, dNow, D_BACK, 1680);
+      an.g.visible = rel >= -D_BACK && rel <= D_AHEAD;
+      if (!an.g.visible) continue;
+      const d = dNow + rel;
+      const [x, z] = riverPoint(d, -(HALF_W + 2.5), dNow);
+      const [tx, tz] = riverPoint(d, -(HALF_W + 1.5), dNow);     // one metre towards the river
+      an.g.position.set(x, BANK_Y, z);
+      an.g.rotation.y = Math.atan2(-(tz - z), tx - x);
+      // the cycle: the float bobs, dips on a bite, a fish is hooked and leaps, then hangs from the tip
+      const p = ((t + an.off) % ANGLER_PERIOD) / ANGLER_PERIOD;
+      const bob = Math.sin(t * 2.2 + an.off) * 0.025;
+      const bite = p > 0.66 && p < 0.72 ? Math.sin(((p - 0.66) / 0.06) * Math.PI) * 0.14 : 0;
+      an.bobber.position.set(BOBBER_REST.x, BOBBER_REST.y + bob - bite, BOBBER_REST.z);
+      beam(an.line, ROD_TIP, an.bobber.position);
+      if (p > 0.72 && p < 0.96) {
+        an.fish.visible = true;
+        if (p < 0.84) {
+          const s = (p - 0.72) / 0.12;   // out of the water, over the arc to the tip
+          an.fish.position.set(
+            BOBBER_REST.x + (ROD_TIP.x - BOBBER_REST.x) * s,
+            BOBBER_REST.y + (ROD_TIP.y - BOBBER_REST.y) * s + Math.sin(Math.PI * s) * 1.3,
+            BOBBER_REST.z + (ROD_TIP.z - BOBBER_REST.z) * s);
+        } else {
+          an.fish.position.set(ROD_TIP.x, ROD_TIP.y - 0.35 + Math.sin(t * 6) * 0.03, ROD_TIP.z);   // hangs from the tip
+        }
+      } else {
+        an.fish.visible = false;
+      }
+    }
+  }
+
   // an open-air swimming pool on the right bank, 100 m past the start. Its long side runs along the river.
   function makePool() {
     const g = new THREE.Group();
@@ -528,6 +688,78 @@ export function createRowWorld(container, onFps) {
   }
   const swimmingPool = { g: makePool(), d: 100, lat: HALF_W + 9 };   // the deck's inner edge clears the river
   scene.add(swimmingPool.g);
+
+  // A classic European travelling-circus big top on the right bank, 1 km past the start: high straight
+  // side walls, a roof with two peaks on two masts and a dip between them, stripes all round, and about
+  // 30 m across for roughly 700 visitors. A one-off, so it is placed by its distance and does not repeat.
+  // Local -x is the river side; the entrance is there.
+  function makeCircusTent() {
+    const g = new THREE.Group();
+    const R = 15, WALL = 7.5, PEAK = 15.5, SEG = 32, RINGS = 16;
+    const stripes = [0xd7263d, 0xf4c20d, 0xf2f2f2, 0x2e86ab];
+    const mats = stripes.map((c) => lam(c, { side: THREE.DoubleSide }));
+    const M = R * 0.45, SIG = R * 0.36;        // mast positions along local x, and how wide each peak is
+    // roof height: the walls' top at the rim, two peaks over the masts (PEAK at the top), a dip between
+    const bump = (x, z) => {
+      const b = (px) => Math.exp(-(((x - px) ** 2 + z * z) / (SIG * SIG)));
+      return Math.min(1, b(-M) + b(M));
+    };
+    const roofY = (x, z) => {
+      const s = Math.min(1, Math.hypot(x, z) / R);
+      return WALL + (PEAK - WALL) * bump(x, z) * Math.pow(1 - s, 0.2);
+    };
+    // the roof grid: rings from the centre (s = 0) to the wall top at the rim (s = 1)
+    const pos = [];
+    const vi = (i, j) => i * (SEG + 1) + j;
+    for (let i = 0; i <= RINGS; i++) for (let j = 0; j <= SEG; j++) {
+      const s = i / RINGS, th = (j / SEG) * Math.PI * 2;
+      const x = R * s * Math.cos(th), z = R * s * Math.sin(th);
+      pos.push(x, roofY(x, z), z);
+    }
+    // the side walls: a bottom ring on the ground and a top ring at wall height
+    const wallBot = pos.length / 3;
+    for (let j = 0; j <= SEG; j++) { const th = (j / SEG) * Math.PI * 2; pos.push(R * Math.cos(th), 0, R * Math.sin(th)); }
+    const wallTop = pos.length / 3;
+    for (let j = 0; j <= SEG; j++) { const th = (j / SEG) * Math.PI * 2; pos.push(R * Math.cos(th), WALL, R * Math.sin(th)); }
+    // stripes: each segment takes the next colour round the tent, so the walls and roof both stripe
+    const colourOf = (j) => j % stripes.length;
+    const byColour = stripes.map(() => []);
+    for (let i = 0; i < RINGS; i++) for (let j = 0; j < SEG; j++) {
+      const a = vi(i, j), b = vi(i + 1, j), c = vi(i + 1, j + 1), d = vi(i, j + 1);
+      byColour[colourOf(j)].push(a, b, c, a, c, d);
+    }
+    for (let j = 0; j < SEG; j++) {
+      const b0 = wallBot + j, b1 = wallBot + j + 1, t0 = wallTop + j, t1 = wallTop + j + 1;
+      byColour[colourOf(j)].push(b0, b1, t1, b0, t1, t0);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    const index = [];
+    byColour.forEach((tris, c) => { geo.addGroup(index.length, tris.length, c); index.push(...tris); });
+    geo.setIndex(index);
+    geo.computeVertexNormals();
+    g.add(new THREE.Mesh(geo, mats));
+    // two masts, one under each peak, each with a flag
+    [[-M, 0xf4c20d], [M, 0xd7263d]].forEach(([px, col]) => {
+      const top = roofY(px, 0);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 4.5, 8), lam(0x8b6b3e));
+      pole.position.set(px, top + 2.1, 0);
+      g.add(pole);
+      const flag = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.2, 0.08), lam(col));
+      flag.position.set(px + 1.2, top + 4.1, 0);
+      g.add(flag);
+    });
+    // the entrance on the river side: a dark opening under a red canopy
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.3, 4, 4.5), lam(0x2a1d14));
+    door.position.set(-R - 0.1, 2, 0);
+    g.add(door);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.3, 6.5), lam(0xd7263d));
+    canopy.position.set(-R - 1.6, 4.6, 0);
+    g.add(canopy);
+    return g;
+  }
+  const circusTent = { g: makeCircusTent(), d: 1000, lat: HALF_W + 30 };   // on the bank, clear of the pool
+  scene.add(circusTent.g);
 
   // Grass strips along the bank, before and after the pool (the pool deck spans 84-116 m).
   // Each strip has towels and umbrellas; the one after the pool has the ice kiosk.
@@ -666,6 +898,19 @@ export function createRowWorld(container, onFps) {
         s.g.rotation.y = -Math.atan2(x2 - x, z2 - z);
       }
     }
+    // the circus tent stays at its place, 1 km from the start (one-off, so no period)
+    {
+      const rel = circusTent.d - dNow;
+      circusTent.g.visible = rel >= -D_BACK && rel <= D_AHEAD + 40;
+      if (circusTent.g.visible) {
+        const [x, z] = riverPoint(dNow + rel, circusTent.lat, dNow);
+        circusTent.g.position.set(x, BANK_Y, z);
+        // turn the tent so its entrance (local -x) faces the river: the unit step towards the river
+        const [rx, rz] = riverPoint(dNow + rel, circusTent.lat - 1, dNow);
+        const vx = rx - x, vz = rz - z;
+        circusTent.g.rotation.y = Math.atan2(vz, -vx);
+      }
+    }
     // the pool stays at its place on the course (its distance does not repeat)
     {
       const rel = wrapRel(swimmingPool.d, dNow, D_BACK, 100000);
@@ -744,7 +989,7 @@ export function createRowWorld(container, onFps) {
   const markerPool = [];
   for (let i = 0; i < 12; i++) markerPool.push(makeMarker());
 
-  // mountains in the far background, built once and never moved (as in the ride world)
+  // mountains in the far background, built once; the horizon group turns them with the river's heading
   const mountainMat = lam(0x6b7f6a, { flatShading: true });
   const snowMat = lam(0xf4f7fa, { flatShading: true });
   for (let i = 0; i < 30; i++) {
@@ -752,10 +997,10 @@ export function createRowWorld(container, onFps) {
     const r = 60 + hash(i + 1210) * 70;
     const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 14), mountainMat);
     m.position.set((hash(i + 1220) - 0.5) * 900, h / 2, -330 - hash(i + 1230) * 130);
-    scene.add(m);
+    horizon.add(m);
     const cap = new THREE.Mesh(new THREE.ConeGeometry(r * 0.35, h * 0.3, 14), snowMat);
     cap.position.set(m.position.x, h * 0.85, m.position.z);
-    scene.add(cap);
+    horizon.add(cap);
   }
 
   // ---------- the scull and its rower ----------
@@ -888,7 +1133,10 @@ export function createRowWorld(container, onFps) {
   let snapArrivalMs = 0;     // when the last server snapshot arrived, for the position prediction
   let atStart = false;       // true during the countdown: the view stays at the start position
   let dispD = 0, lastStrokes = null;
-  let lastStrokeMs = 0, strokePeriodS = 2.0;
+  // preview (not riding): the position slider places the boat; while the rower rows it moves on by the
+  // distance measured by the server (distance_m, counted in preview too)
+  let previewOn = false, previewPlace = null, previewOffset = 0;   // previewOffset: boat minus measured distance
+  let lastSsMs = 0, lastSeMs = 0, driveS = 0, recS = 0, strokePeriodS = 2.0;   // sensor markers, ms
   let sceneT = 0;
   let raf = 0;
   let lastFrame = performance.now();
@@ -906,6 +1154,7 @@ export function createRowWorld(container, onFps) {
   fit();
 
   function rebuildRiver(dNow) {
+    const bankNrm = bankGeo.attributes.normal.array;
     // rows from D_BACK behind to D_AHEAD ahead of the scull, two verts per row (left, right)
     for (let r = 0; r < ROWS; r++) {
       const rel = -D_BACK + r * ROW_STEP;
@@ -914,22 +1163,87 @@ export function createRowWorld(container, onFps) {
       const [rx, rz] = riverPoint(a, HALF_W, dNow);
       riverPos[r * 6 + 0] = lx; riverPos[r * 6 + 1] = 0.05; riverPos[r * 6 + 2] = lz;
       riverPos[r * 6 + 3] = rx; riverPos[r * 6 + 4] = 0.05; riverPos[r * 6 + 5] = rz;
+      riverFlow[r * 4 + 0] = 0; riverFlow[r * 4 + 1] = a;   // left edge
+      riverFlow[r * 4 + 2] = 1; riverFlow[r * 4 + 3] = a;   // right edge
+      const st = streamNear(a);
       for (const side of [0, 1]) {
-        const lat0 = side === 0 ? -HALF_W : HALF_W;
-        const sg = Math.sign(lat0);
-        const [ex, ez] = riverPoint(a, lat0, dNow);                 // the water's edge
-        const [tx, tz] = riverPoint(a, lat0 + sg * 1.0, dNow);      // top of the 45-degree slope (1 m out, 1 m up)
-        const [ox, oz] = riverPoint(a, lat0 + sg * BANK_W, dNow);   // the flat bank top
-        const o = (r * 2 + side) * 9;
-        bankPos[o + 0] = ex; bankPos[o + 1] = 0.05; bankPos[o + 2] = ez;
-        bankPos[o + 3] = tx; bankPos[o + 4] = BANK_Y; bankPos[o + 5] = tz;
-        bankPos[o + 6] = ox; bankPos[o + 7] = BANK_Y; bankPos[o + 8] = oz;
+        const sg = side === 0 ? -1 : 1;
+        // the horizontal direction out from the river here, for the slope's normals
+        const [ex, ez] = riverPoint(a, sg * HALF_W, dNow);
+        const [ox, oz] = riverPoint(a, sg * (HALF_W + 1), dNow);
+        const nx = -(ox - ex) * Math.SQRT1_2, nz = -(oz - ez) * Math.SQRT1_2;   // up the slope and towards the river
+        for (let k = 0; k < NS; k++) {
+          const l = BANK_LAT[k];
+          const [px, pz] = riverPoint(a, sg * (HALF_W + l), dNow);
+          // the water's edge at 0.05, then the 45-degree slope up to the flat top
+          let y = l === 0 ? 0.05 : 0.05 + Math.min(l, 1) * (BANK_Y - 0.05);
+          // a stream cuts the bank down to the water across its width at this lateral distance
+          if (l > 0 && st && st.sg === sg && Math.abs(st.off) <= streamWidth(l) / 2 + 0.5) y = STREAM_BED;
+          const o = ((r * 2 + side) * NS + k) * 3;
+          bankPos[o] = px; bankPos[o + 1] = y; bankPos[o + 2] = pz;
+          // normals: the slope tilts towards the river; the flat top and a cut bed face straight up
+          const sloped = l < 1 && y !== STREAM_BED;
+          bankNrm[o] = sloped ? nx : 0; bankNrm[o + 1] = sloped ? Math.SQRT1_2 : 1; bankNrm[o + 2] = sloped ? nz : 0;
+        }
       }
     }
     riverGeo.attributes.position.needsUpdate = true;
+    riverFlowAttr.needsUpdate = true;
     bankGeo.attributes.position.needsUpdate = true;
-    riverGeo.computeVertexNormals();
-    bankGeo.computeVertexNormals();   // without normals the lighting is black
+    bankGeo.attributes.normal.needsUpdate = true;
+  }
+
+  // ---------- streams: a brook every 500 m, alternating banks, running straight into the river ----------
+  // The bank is cut down to the water across the stream's width (see rebuildRiver), and the flowing
+  // stream ribbon lies in that cut from the river's edge out across the bank.
+  const STREAM_LEN = 110, STREAM_BED = 0.03, STREAM_Y = 0.15;   // the ribbon runs out over the meadow beyond the bank   // surface 10 cm above the river (0.05)
+  const STREAM_PERIOD = 1000;                                   // each bank repeats every 1000 m
+  const STREAMS = [{ d: 250, sg: -1 }, { d: 750, sg: 1 }];      // left at 250 m, right at 750 m, and so on
+  // the width of a stream at lateral distance l from the water's edge: 10 m where it meets the river,
+  // 5 m at 2 m out, then narrowing to 2 m at the bank's far edge and staying 2 m beyond it
+  const streamWidth = (l) => (l <= 2 ? 10 - 2.5 * Math.max(0, l) : Math.max(2, 5 - 3 * (l - 2) / (BANK_W - 2)));
+  // the stream near distance a (within reach of its cut): its side (-1 left, +1 right) and its offset
+  // from the stream's centre in metres; null when none is near
+  function streamNear(a) {
+    for (const s of STREAMS) {
+      let m = ((a - s.d) % STREAM_PERIOD + STREAM_PERIOD) % STREAM_PERIOD;
+      if (m > STREAM_PERIOD / 2) m -= STREAM_PERIOD;
+      if (Math.abs(m) <= 4) return { sg: s.sg, off: m };
+    }
+    return null;
+  }
+  const streamMeshes = STREAMS.map((s) => {
+    // local z: 0 is a metre inside the water, 1 is the water's edge, and 1 + l is l metres out across the bank.
+    // The width follows streamWidth at each row: rows at these lateral distances (m) from the edge
+    const geo = new THREE.BufferGeometry();
+    const rowsL = [-1, 0, 2, 10, 25, 45, BANK_W, STREAM_LEN];
+    const pos = [], flow = [], idx = [];
+    rowsL.forEach((l, i) => {
+      const hw = streamWidth(l) / 2, z = l + 1;
+      pos.push(-hw, 0, z, hw, 0, z);
+      flow.push(0, z, 1, z);
+      if (i > 0) { const a = 2 * (i - 1), b = 2 * i; idx.push(a, a + 1, b + 1, a, b + 1, b); }
+    });
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute("aFlow", new THREE.Float32BufferAttribute(flow, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();   // without normals the lighting is black
+    const mesh = new THREE.Mesh(geo, makeWater(-1, WATER_BLUE));   // flowing towards the river
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    return { mesh, s };
+  });
+  function placeStreams(dNow) {
+    for (const { mesh, s } of streamMeshes) {
+      const rel = wrapRel(s.d, dNow, D_BACK, STREAM_PERIOD);
+      mesh.visible = rel >= -D_BACK && rel <= D_AHEAD;
+      if (!mesh.visible) continue;
+      const lat = s.sg * (HALF_W - 1);                             // starts a metre inside the water, so it joins
+      const [x, z] = riverPoint(dNow + rel, lat, dNow);
+      const [ox, oz] = riverPoint(dNow + rel, lat + s.sg, dNow);   // one metre further out
+      mesh.position.set(x, STREAM_Y, z);
+      mesh.rotation.y = Math.atan2(ox - x, oz - z);                // local +z points out across the bank
+    }
   }
 
   function placeScenery(dNow) {
@@ -1057,12 +1371,21 @@ export function createRowWorld(container, onFps) {
     }
   }
 
-  // Stroke phase: 0 = catch, 0.4 = finish, 1 = next catch. Anchored to each stroke event.
-  function strokePhase(nowMs) {
-    if (!snap || !snap.stroke_rate_spm) return 0;
-    const sinceS = (nowMs - lastStrokeMs) / 1000;
-    if (sinceS > 2 * strokePeriodS) return 0;
-    return (sinceS / strokePeriodS) % 1;
+  // Stroke phase: 0 = catch, 0.4 = finish, 1 = next catch. Anchored to the sensor's SS (catch)
+  // and SE (finish) markers; the drive and recovery durations come from the last stroke.
+  // The animation leads the markers by ANIM_LEAD_S, which compensates the monitor's marker delay.
+  const ANIM_LEAD_S = 0.5;
+  function strokePhase(nowMsRaw) {
+    if (DBG.t != null) return DBG.t;              // debug: stroke frozen at a given phase
+    if (!snap || !snap.stroke_rate_spm || !lastSsMs) return 0;
+    const nowMs = nowMsRaw + ANIM_LEAD_S * 1000;
+    const period = 60 / snap.stroke_rate_spm;
+    const drive = Math.min(driveS || 0.4 * period, 0.9 * period);
+    if (nowMs - Math.max(lastSsMs, lastSeMs) > 2 * period * 1000) return 0;
+    // predicted from the last catch at the current stroke rate; each real marker re-anchors it
+    const x = ((nowMs - lastSsMs) / 1000) % period;
+    if (x < drive) return 0.4 * x / drive;
+    return 0.4 + 0.6 * (x - drive) / (period - drive);
   }
 
   // the boat's speed through the stroke: quicker in the drive, slower in the recovery.
@@ -1172,6 +1495,20 @@ export function createRowWorld(container, onFps) {
   function resetNav() {
     Object.assign(nav, DEFAULT_NAV, { pan: { x: 0, y: 0 }, chase: true });
   }
+
+  // Debug views for screenshots: /row?cam=side&t=0.3&d=100 (camera view, stroke phase, distance).
+  // A fixed view is not chase: it stays where it is put.
+  const VIEWS = {
+    chase: { yaw: 0, pitch: 0.3, dist: 7 },
+    side: { yaw: Math.PI / 2, pitch: 0.12, dist: 6 },
+    top: { yaw: 0, pitch: 1.45, dist: 9 },
+    bow: { yaw: Math.PI, pitch: 0.25, dist: 6 },
+    far: { yaw: 0.6, pitch: 0.35, dist: 45 },
+  };
+  if (DBG.cam && VIEWS[DBG.cam]) {
+    Object.assign(nav, VIEWS[DBG.cam], { chase: false });
+    if (DBG.zoom != null) nav.dist = DBG.zoom;
+  }
   function updateCamera(dt) {
     if (nav.chase && !drag.active) {          // ease back to the default chase view
       const k = 1 - Math.exp(-dt * 3);
@@ -1243,18 +1580,55 @@ export function createRowWorld(container, onFps) {
   window.addEventListener("keyup", onKeyUp);
 
   // A cat runs along the left bank and keeps up with the boat as well as it can (it is not as fast as
-  // a good rower: it falls behind, turns up ahead again and sets off after the boat once more).
-  const cat = createCompanion({ scale: 3, target: 14 });   // runs well ahead of the boat, where the camera sees it
-  scene.add(cat.group);
+  // a good rower: it falls behind, turns up ahead again and sets off after the boat once more). When
+  // it sprints it hunts a mouse that runs ahead of it on the same line of the bank.
+  const CAT_SCALE = 3;
   const CAT_LAT = -(HALF_W + 2.2);
+  const MOUSE_IDLE = 2.5, MOUSE_NEAR = 1.2, MOUSE_FAR = 3.5;     // metres ahead of the cat
+  let mouseRel = MOUSE_IDLE;
+  const cat = createCompanion({
+    scale: CAT_SCALE, target: 14, vmax: 2.05,              // runs well ahead of the boat; half its former top speed
+    aimAt: () => new THREE.Vector3(0, 0.03, -mouseRel / CAT_SCALE),
+  });
+  scene.add(cat.group);
+  const mouse = makeMouse();
+  mouse.scale.setScalar(CAT_SCALE);
+  scene.add(mouse);
+  // Over a stream's mouth on the left bank the cat and the mouse leap: an arc through the air, 10 m wide
+  // and 1.6 m high at the top, instead of running across the cut in the bank.
+  const LEAP_SPAN = 10, LEAP_H = 1.6;
+  function leapHeight(a) {
+    for (const s of STREAMS) {
+      if (s.sg !== -1) continue;                                  // the cat runs on the left bank
+      let m = ((a - s.d) % STREAM_PERIOD + STREAM_PERIOD) % STREAM_PERIOD;
+      if (m > STREAM_PERIOD / 2) m -= STREAM_PERIOD;
+      if (Math.abs(m) < LEAP_SPAN / 2) return LEAP_H * (1 - (m / (LEAP_SPAN / 2)) ** 2);
+    }
+    return 0;
+  }
   function placeCat(dNow, dt) {
     cat.update(dt, snap && snap.speed_ms ? snap.speed_ms : 0);
     const a = dNow + cat.off;
     const [x, z] = riverPoint(a, CAT_LAT, dNow);
     const [x2, z2] = riverPoint(a + 1, CAT_LAT, dNow);
-    cat.group.position.set(x, BANK_Y, z);
+    cat.group.position.set(x, BANK_Y + leapHeight(a), z);
     cat.group.rotation.y = Math.atan2(-(x2 - x), -(z2 - z));       // the cat faces -z: turn it along the river
     cat.group.visible = cat.off > -D_BACK && cat.off < D_AHEAD;
+    placeMouse(dNow, dt, a);
+  }
+  function placeMouse(dNow, dt, catA) {
+    if (cat.gait === "sprint") {
+      const vm = mouseRel < MOUSE_NEAR ? cat.speed + 1.5 : mouseRel > MOUSE_FAR ? Math.max(0, cat.speed - 1) : cat.speed + 0.3;
+      mouseRel += (vm - cat.speed) * dt;                           // darts off when the cat is close, waits when far
+    } else {
+      mouseRel += (MOUSE_IDLE - mouseRel) * Math.min(1, dt * 2);
+    }
+    const am = catA + mouseRel;
+    const [x, z] = riverPoint(am, CAT_LAT, dNow);
+    const [x2, z2] = riverPoint(am + 1, CAT_LAT, dNow);
+    mouse.position.set(x, BANK_Y + leapHeight(am), z);
+    mouse.rotation.y = Math.atan2(-(x2 - x), -(z2 - z));
+    mouse.visible = cat.group.visible;
   }
 
   function frame(now) {
@@ -1262,17 +1636,38 @@ export function createRowWorld(container, onFps) {
     const dt = Math.min(0.1, (now - lastFrame) / 1000);
     lastFrame = now;
     sceneT += dt;
+    waterTime.value = sceneT;   // the water moves with the clock, even when the scull is still
 
-    if (atStart) {
+    if (DBG.d != null) {
+      dispD = DBG.d;                                // debug: boat held at a given distance
+    } else if (previewOn) {
+      // the monitor's distance arrives at 5 Hz: the boat moves on smoothly at the speed every frame and is
+      // eased towards the measured distance, so it does not step
+      const measured = snap ? (snap.distance_exact_m ?? snap.distance_m ?? 0) : 0;
+      if (previewPlace != null) { dispD = previewPlace; previewPlace = null; previewOffset = dispD - measured; }   // the slider places the boat
+      else if (snap && (snap.speed_ms || 0) > 0.2) {
+        dispD += snap.speed_ms * dt;
+        dispD += (measured + previewOffset - dispD) * (1 - Math.exp(-dt * 2));
+      }
+    } else if (atStart) {
       dispD = 0;                                    // held at the start position during the countdown
     } else if (snap) {
       // the view moves with the measured speed and follows the measured distance
       const v = snap.speed_ms || 0;
       dispD += v * dt * (1 + surge(strokePhase(performance.now())));
-      if (snap.status === "running") dispD += ((snap.distance_m || 0) - dispD) * (1 - Math.exp(-dt * 4));
+      if (snap.status === "running") dispD += ((snap.distance_exact_m ?? snap.distance_m ?? 0) - dispD) * (1 - Math.exp(-dt * 4));
     }
+    // the river's heading at the scull: the far background turns by the same angle as the water.
+    // Three.js rotation.y = h maps (x, z) like toBoatFrame(x, z, h), so the horizon stays aligned.
+    const hz = headingAt(dispD);
+    horizon.rotation.y = hz;
+    // the sun is fixed in the world, so in the boat's frame it turns with the river (same as riverPoint)
+    const hc = Math.cos(hz), hs = Math.sin(hz);
+    sun.position.set(sunAbs.x * hc + sunAbs.z * hs, sunAbs.y, -sunAbs.x * hs + sunAbs.z * hc);
     rebuildRiver(dispD);
     placeScenery(dispD);
+    placeStreams(dispD);
+    placeAnglers(dispD, sceneT);
     placeDolphins(dispD, sceneT, dt);
     placeExtras(dispD, sceneT);
     placeCat(dispD, dt);
@@ -1281,6 +1676,7 @@ export function createRowWorld(container, onFps) {
 
     updateCamera(dt);
     renderer.render(scene, camera);
+    window.__rowFrames = (window.__rowFrames || 0) + 1;   // lets the screenshot tool wait for real frames
 
     frames++;
     if (now - fpsT >= 1000) {
@@ -1297,12 +1693,24 @@ export function createRowWorld(container, onFps) {
       snap = s;
       snapArrivalMs = performance.now();
       if (s.stroke_rate_spm) strokePeriodS = 60 / s.stroke_rate_spm;
-      if (lastStrokes !== null && s.strokes !== lastStrokes) lastStrokeMs = performance.now();
       lastStrokes = s.strokes;
       if (s.status === "idle" || s.status === "none") { dispD = 0; lastStrokes = null; }
     },
     setBots(on) { botsOn = !!on; },
+    // the sensor's stroke markers: "ss" = drive starts (catch), "se" = drive ends (finish)
+    strokeEvent(kind, atMs) {
+      const now = atMs;
+      if (kind === "ss") {
+        if (lastSeMs > lastSsMs) { const r = (now - lastSeMs) / 1000; if (r > 0.2 && r < 4) recS = r; }
+        lastSsMs = now;
+      } else if (kind === "se") {
+        if (lastSsMs > 0) { const d = (now - lastSsMs) / 1000; if (d > 0.2 && d < 3) driveS = d; }
+        lastSeMs = now;
+      }
+    },
     holdAtStart(on) { atStart = !!on; if (atStart) dispD = 0; },
+    setPreview(d) { previewOn = d != null; previewPlace = d == null ? null : Math.max(0, d); },   // null hands the boat back to the rower
+    position() { return dispD; },   // where the boat is on the river now (m)
     resetView() { resetNav(); },
     dispose() {
       cancelAnimationFrame(raf);

@@ -189,18 +189,18 @@ class RowState:
         return self.workout.phase_at(self.elapsed)
 
     def advance(self, now: float, dt: float) -> None:
-        """Integrate boat physics. The clock and distances only move while running."""
+        """Integrate boat physics. The clock only moves while running; distance also moves in preview."""
         if dt <= 0 or self.status not in ("running", "preview"):
             return
         v_in = self.value("speed", now) or 0.0
         p_in = WATT_CONST * max(v_in, 0.0) ** 3
         self.power_w = p_in
+        # distance as the monitor counts it: ticks / 91.8, from this session's start (in preview, from the app start)
+        if self._dist_m is not None:
+            self.distance_m = max(0.0, self._dist_m - self._dist_offset)
+        else:
+            self.distance_m += v_in * dt
         if self.status == "running":
-            if self._dist_m is not None:
-                # distance as the monitor counts it: ticks / 91.8, from this session's start
-                self.distance_m = max(0.0, self._dist_m - self._dist_offset)
-            else:
-                self.distance_m += v_in * dt
             self.elapsed += dt
             self._run_s += dt
             self._energy_j += p_in * dt
@@ -256,6 +256,7 @@ class RowState:
             "strokes": self.strokes,
             "distance_per_stroke_m": _r(self.distance_m / self.strokes, 2) if self.strokes else None,
             "distance_m": _r(self.distance_m, 0),   # whole metres, as the monitor shows
+            "distance_exact_m": _r(self.distance_m, 2),   # unrounded: the view moves on this, so it does not step by metres
             "hr_bpm": self.value("heart_rate", now, hold=STALE_S),
             "target_w": self.targets.get(kind),
             # dolphins are shown without names: only position, lane and speed are sent

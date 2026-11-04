@@ -104,6 +104,11 @@ function updateButtons() {
     document.body.classList.toggle("riding", riding);
     window.dispatchEvent(new Event("resize"));
   }
+  // the position slider places the boat only while it is not rowing
+  const posSlider = $("posSlider");
+  posSlider.disabled = riding;
+  $("posHint").textContent = riding ? "(während der Fahrt gesperrt)" : "";
+  if (riding && world) world.setPreview(null);
   $("btnStart").disabled = running || paused || countdownActive || !rowerReady;
   $("btnPause").disabled = !(running || paused);
   $("btnPause").textContent = paused ? "Resume" : "Pause";
@@ -111,6 +116,31 @@ function updateButtons() {
 }
 
 $("btnLoad").onclick = loadWorkout;
+
+// position slider: a spring back to the middle. Drag it up to 1 km back or forward: the boat moves along
+// the river while you drag, and on release the slider returns to the middle. Only while the boat is not rowing.
+// The readout shows the absolute position along the river (km from the start). While dragging it shows the
+// place the boat is moving to; otherwise the boat's current place.
+const fmtAbs = (m) => `${(Math.max(0, m) / 1000).toFixed(2).replace(".", ",")} km`;
+let dragAnchor = null;   // the boat's absolute position when the drag began
+$("posSlider").oninput = () => {
+  const jump = +$("posSlider").value;
+  if (!world) return;
+  if (dragAnchor == null) dragAnchor = world.position();
+  const target = Math.max(0, dragAnchor + jump);
+  $("posVal").textContent = fmtAbs(target);
+  world.setPreview(target);   // the boat follows the drag
+};
+$("posSlider").onchange = () => {
+  const jump = +$("posSlider").value;
+  if (world && dragAnchor != null) world.setPreview(Math.max(0, dragAnchor + jump));   // the final place
+  dragAnchor = null;
+  $("posSlider").value = 0;   // back to the middle
+};
+// the readout follows the boat when not dragging
+setInterval(() => {
+  if (world && dragAnchor == null) $("posVal").textContent = fmtAbs(world.position());
+}, 200);
 // choosing a preset fills the fields and loads it straight away
 $("wPreset").onchange = async () => {
   const p = PRESETS[$("wPreset").value];
