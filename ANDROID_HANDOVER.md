@@ -69,10 +69,14 @@ The user finds the manual web import cumbersome. Findings:
 - **Reusing the Garmin app's stored login is impossible** on a non-rooted phone (private app storage) and is not acceptable anyway.
 - **Unofficial upload with the user's Garmin password** (community libraries, undocumented endpoint): unverified, unsupported, risks the account and would
   need internet permission and stored credentials in the app. Advised against; the user cares about security.
-- Remaining options: web import (desktop, or the phone's browser in desktop mode: the Android file picker may or may not list `.fit`; untested), or
-  a Garmin device sync trick (copy the `.fit` into the watch's activity folder over USB so the app's normal sync uploads it; unverified for the user's watch).
-- If the phone browser import works, a button that opens `connect.garmin.com` import page would remove the navigation (note: Garmin's app may claim
-  `https://connect.garmin.com/...` links; check that the page opens in the browser).
+- **What works: the web import in Chrome on the phone** (7 Nov 2026, CONFIRMED: the import page showed "Import abgeschlossen" for a 339-byte
+  export of a short test ride). Garmin Connect in Chrome, cloud-upload icon in the top
+  bar, page `https://connect.garmin.com/app/import-data`; the `.fit` is chosen from Downloads (the app already copies every export there).
+- **Built:** the Setup button "Open Garmin import page (Chrome)" (`openGarminImportPage` in `MainActivity.kt`: `ACTION_VIEW` of that URL with package
+  `com.android.chrome` so Garmin's app, which claims several `connect.garmin.com/app/...` paths, does not take the link; falls back to the default browser).
+  A plain link: no password, no internet permission in the app. After an export the status line tells the user to tap it and pick the file. Installed
+  and shown on the phone; the tap itself has not been tested by me.
+- Not tried: a Garmin device sync trick (copy the `.fit` into the watch's activity folder over USB so the app's normal sync uploads it; unverified).
 
 ## 6. What was learned (details in the skill)
 - Stick reset after ~37 s came from a thread that wrote setup commands while nobody read (serial queue overflow, event 0x34); fixed by a pure reader thread.

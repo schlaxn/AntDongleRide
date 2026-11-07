@@ -43,6 +43,9 @@ cycling dynamics) are not yet verified on real hardware.
 - Watchdog: if the stick restarts itself, channels are re-configured.
 - **Automatic .fit export when a recording is stopped**: writes `ride_<time>.fit` (1 Hz records, dropouts left
   as gaps; only fields Garmin supports) and copies it to Downloads. Garmin Connect imports it.
+- Uploading to Garmin Connect: the Garmin Connect Android app cannot import activity files (it treats a `.fit` as a course), and there is no
+  official personal upload API. The Setup button "Open Garmin import page (Chrome)" opens `connect.garmin.com/app/import-data` in Chrome; pick the
+  exported ride from Downloads there.
 - Screen stays on while the app is open. Optional checkbox "Dim screen when idle" (off by default): after 15 s
   without a touch the brightness drops to a minimum, any touch restores it at once (that first touch only
   wakes the screen and presses nothing). The screen itself never turns off.

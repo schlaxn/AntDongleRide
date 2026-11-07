@@ -85,7 +85,7 @@ phase, torque efficiency, pedal smoothness over ANT+ (rider position ANT+ only).
 Two pages (Setup, Live), swipe or tabs, no scrolling, everything scaled from the display (no fixed px/dp; `DashView.unit()` sizing), smallest text ~15 dp,
 true black theme, status banner on top of both pages (connection, REC time, HR, power, speed), controls right under the banner, one dual-use
 Start/STOP recording button on Setup (heart rate required to start, cadence/speed optional), no Stop button on Live, `.fit` exported automatically
-when a recording stops and named after the ride start, unfinished rides exported at the next app start, "Dim screen when idle" checkbox (15 s, a touch
+when a recording stops and named after the ride start, a Setup button opens Garmin's import page in Chrome, unfinished rides exported at the next app start, "Dim screen when idle" checkbox (15 s, a touch
 restores and is swallowed), portrait only, Disconnect disabled while recording.
 
 ## Pitfalls (each cost time)
@@ -95,7 +95,9 @@ restores and is swallowed), portrait only, Disconnect disabled while recording.
 - A debug build and a release build have different signatures: `adb install -r` of a release over a debug fails, and uninstalling deletes the app's captures.
 - Getting the `.fit` into Garmin Connect from the phone: do NOT build "open with Garmin Connect". The Android app opens a `.fit` as a course import (asks for a
   track type), not as an activity. No official personal upload API exists; reusing the Garmin app's login is impossible; the password-based unofficial route is
-  advised against. See `ANDROID_HANDOVER.md` section 5a for the full findings and what is left (web import).
+  advised against. What works: Chrome on the phone, `https://connect.garmin.com/app/import-data` (cloud icon in the top bar), pick the `.fit` from Downloads.
+  See `ANDROID_HANDOVER.md` section 5a. To read a tab's URL (only when the user asks): `adb forward tcp:9333 localabstract:chrome_devtools_remote`, GET
+  `http://127.0.0.1:9333/json/list`, print only the tab asked for, then `adb forward --remove tcp:9333`.
 - Google developer verification (enforcement for unregistered sideloaded apps from 2027): register the package under a free limited-distribution account
   (up to 20 devices) or a $25 full account; see https://developer.android.com/developer-verification/guides/faq.
 - Release build: `$env:ANTLOGGER_SIGNING_PROPS="E:\jschlager\keys\signing.properties"; .\gradlew.bat assembleRelease`, verify with

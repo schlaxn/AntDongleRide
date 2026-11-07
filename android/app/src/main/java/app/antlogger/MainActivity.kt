@@ -52,6 +52,7 @@ class MainActivity : Activity() {
     private lateinit var tabLive: Button
     private lateinit var connectButton: Button
     private lateinit var recordButton: Button
+    private lateinit var garminButton: Button
     private lateinit var statusText: TextView
     private lateinit var pagesView: TextView
     private lateinit var devInfo: TextView
@@ -249,6 +250,10 @@ class MainActivity : Activity() {
                 if (s.rideActive) s.endRide() else s.beginRide()
             }
         }
+        garminButton = Button(this).dark(tBtn * 0.85f).apply {
+            text = "Open Garmin import page (Chrome)"
+            setOnClickListener { openGarminImportPage() }
+        }
         // "Dim screen when idle": a checkbox, off by default; a touch brings the brightness back
         val dimCheck = android.widget.CheckBox(this).apply {
             text = "Dim screen when idle (touch wakes it)"
@@ -322,6 +327,7 @@ class MainActivity : Activity() {
             // controls first, right under the banner; heart rate and power are in the banner
             addView(connectButton, weight(1.0f)); gap(connectButton)
             addView(recordButton, weight(1.2f)); gap(recordButton)
+            addView(garminButton, weight(1.0f)); gap(garminButton)
             addView(dimCheck, weight(0.8f))
             addView(wheelRow, weight(0.8f))
             addView(statusText, weight(1.5f)) // room for the export / recovery message (3-4 lines)
@@ -464,7 +470,8 @@ class MainActivity : Activity() {
                 ?: return "nothing to export: no decodable samples in ${capture.name}"
             val where = copyToDownloads(fit)
             (if (recovered) "RECOVERED unfinished ride: " else "exported ") +
-                "${fit.name}: ${r.seconds}s, avg HR ${r.avgHr ?: "-"}, max ${r.maxHr ?: "-"}. $where"
+                "${fit.name}: ${r.seconds}s, avg HR ${r.avgHr ?: "-"}, max ${r.maxHr ?: "-"}. $where. " +
+                "To upload: tap the Garmin button and choose it."
         } catch (e: Exception) {
             "EXPORT ERROR: ${e.message}"
         }
@@ -517,6 +524,25 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /**
+     * Opens Garmin Connect's import page in Chrome (the Garmin Connect app itself cannot import activity files: it
+     * treats a .fit as a course). The user then picks the exported ride from Downloads. A plain link: no password,
+     * no internet access in this app. Chrome is named explicitly so Garmin's app does not claim the link; without
+     * Chrome the default browser is used.
+     */
+    private fun openGarminImportPage() {
+        val uri = android.net.Uri.parse(GARMIN_IMPORT_URL)
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage("com.android.chrome"))
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri))
+            } catch (e2: Exception) {
+                say("No browser could open the Garmin import page: ${e2.message}", 30)
+            }
+        }
+    }
+
     /** Makes the .fit visible in the phone's Downloads folder (Android 10+), ready for upload. */
     private fun copyToDownloads(src: File): String {
         if (Build.VERSION.SDK_INT < 29) return "saved in app folder only"
@@ -539,5 +565,6 @@ class MainActivity : Activity() {
     companion object {
         const val ACTION_PERMISSION = "app.antlogger.USB_PERMISSION"
         const val DIM_AFTER_MS = 15_000L
+        const val GARMIN_IMPORT_URL = "https://connect.garmin.com/app/import-data"
     }
 }
