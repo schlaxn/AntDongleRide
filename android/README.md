@@ -31,12 +31,23 @@ cycling dynamics) are not yet verified on real hardware.
 ## What it does
 - Opens the ANT USB stick 2 / USB-m (VID 0FCF, PID 1008/1009) and listens on wildcard channels
   (heart rate, power x2, speed and cadence) with infinite search.
-- Raw log per session: `capture_<time>.csv` with `ts_ms,<raw ANT frame hex>`, in the app folder
-  `Android/data/app.antlogger/files/`.
+- Two pages (swipe or tabs), no scrolling, everything scaled to the display, portrait, true-black theme:
+  **Setup** (connect, start/stop recording, settings, device info, raw message log) and **Live** (power,
+  heart rate, cadence, balance, power phase, effectiveness, smoothness, PCO, rider position). A banner on
+  both pages shows connection, recording time, heart rate, power and speed.
+- Recording needs a live heart rate (cadence and speed sensors are optional). Connect and recording are
+  separate: stopping a ride keeps the stick connected.
+- Raw log per connection: `capture_<time>.csv` with `ts_ms,<raw ANT frame hex>` plus ride start/stop and wheel
+  markers, in the app folder `Android/data/app.antlogger/files/`. Per ride: `samples_<time>.csv` with every
+  decoded value.
 - Watchdog: if the stick restarts itself, channels are re-configured.
-- "Export latest capture to .fit": writes `ride_<time>.fit` (1 Hz records, dropouts left as gaps) and copies
-  it to Downloads. Garmin Connect imports it.
-- Screen stays on while the app is open; optional "Dim screen" setting (off by default).
+- **Automatic .fit export when a recording is stopped**: writes `ride_<time>.fit` (1 Hz records, dropouts left
+  as gaps; only fields Garmin supports) and copies it to Downloads. Garmin Connect imports it.
+- Screen stays on while the app is open. Optional checkbox "Dim screen when idle" (off by default): after 15 s
+  without a touch the brightness drops to a minimum, any touch restores it at once (that first touch only
+  wakes the screen and presses nothing). The screen itself never turns off.
+- At the next app start, before any connection, a ride that began but was never stopped (app killed, phone
+  died) is exported from its raw log, once.
 
 ## Build and install (Windows)
 1. JDK 17: `winget install EclipseAdoptium.Temurin.17.JDK`

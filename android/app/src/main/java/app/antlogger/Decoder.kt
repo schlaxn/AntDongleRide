@@ -29,6 +29,13 @@ object Metrics {
     const val BARYCENTER = "torque_barycenter_deg" // degrees
     const val BATTERY_V = "battery_voltage"
     const val BATTERY_STATUS = "battery_status" // 1 new, 2 good, 3 ok, 4 low, 5 critical
+    // Cycling dynamics settings as REPORTED by the sensor (page 0x02, subpage 0xFE): 1 = on, 0 = off.
+    // Only present for settings the sensor says it supports. Read from its broadcast; never written.
+    const val DYN_8HZ = "dyn_8hz"
+    const val DYN_POWER_PHASE = "dyn_power_phase"
+    const val DYN_PCO = "dyn_pco"
+    const val DYN_RIDER_POSITION = "dyn_rider_position"
+    const val DYN_BARYCENTER = "dyn_torque_barycenter"
     const val MANUFACTURER = "manufacturer_id"
     const val MODEL = "model_number"
     const val HW_REV = "hardware_revision"
@@ -107,6 +114,20 @@ object Decoder {
                 if (hr in 1..254) add(Metrics.HEART_RATE, hr.toDouble())
             }
             DEV_POWER -> when (page) {
+                0x02 -> if (u8(1) == 0xFE) {
+                    // Advanced Capabilities 2 as sent BY the sensor: byte 4 mask (bit 0 = supported),
+                    // byte 6 value (bit 0 = on). Bit 1 = 8 Hz, 3 = power phase, 4 = PCO, 5 = rider position,
+                    // 6 = torque barycenter. Unsupported settings are left out.
+                    val mask = u8(4)
+                    val value = u8(6)
+                    val names = listOf(
+                        1 to Metrics.DYN_8HZ, 3 to Metrics.DYN_POWER_PHASE, 4 to Metrics.DYN_PCO,
+                        5 to Metrics.DYN_RIDER_POSITION, 6 to Metrics.DYN_BARYCENTER,
+                    )
+                    for ((bit, name) in names) {
+                        if ((mask shr bit) and 1 == 0) add(name, if ((value shr bit) and 1 == 0) 1.0 else 0.0)
+                    }
+                }
                 0x10 -> {
                     // byte 2 pedal power (bit 7 = right pedal share, bits 0-6 percent), 3 cadence, 6-7 power
                     val pw = u8(6) or (u8(7) shl 8)
@@ -235,6 +256,23 @@ class SensorTracker(@Volatile var wheelM: Double = 2.105) {
  * returned whole.
  */
 object CaptureReader {
+    /** The latest ride in a capture: when it started (null = no ride marker) and whether it was stopped. */
+    class RideInfo(val startMs: Long?, val finished: Boolean)
+
+    fun rideInfo(lines: Sequence<String>): RideInfo {
+        var start: Long? = null
+        var finished = false
+        for (line in lines) {
+            val parts = line.split(',')
+            if (parts.size != 2) continue
+            when (parts[1].trim()) {
+                "RIDE_START" -> { start = parts[0].toLongOrNull() ?: continue; finished = false }
+                "RIDE_STOP" -> if (start != null) finished = true
+            }
+        }
+        return RideInfo(start, finished)
+    }
+
     fun read(lines: Sequence<String>): List<Sample> {
         val all = lines.toList()
         var start = Long.MIN_VALUE

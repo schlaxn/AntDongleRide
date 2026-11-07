@@ -103,6 +103,8 @@ class AntSession(
 
     @Volatile var rideActive = false
         private set
+    @Volatile var rideStartMs = 0L
+        private set
 
     /** Starts a ride (own samples file, start marker). Refused while no heart rate is received. */
     fun beginRide(): Boolean {
@@ -114,6 +116,7 @@ class AntSession(
             rawWriter?.write("$now,RIDE_START\n")
             rawWriter?.flush()
             tracker.requestDistanceReset() // distance counts from the start of the ride
+            rideStartMs = now
             rideActive = true
         }
         return true

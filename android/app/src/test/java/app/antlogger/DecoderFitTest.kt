@@ -100,6 +100,32 @@ class DecoderFitTest {
     }
 
     @Test
+    fun capabilitiesPageReportsWhichDynamicsTheSensorHasSwitchedOn() {
+        // sensor supports 8 Hz, power phase, PCO, rider position, barycenter (mask bits 1,3,4,5,6 = 0).
+        // value: bit0 = 1 (not 4 Hz), bit1 = 0 (8 Hz on), bit3 = 0 (power phase on), bit4 = 0 (PCO on),
+        // bit5 = 1 (rider position off), bit6 = 1 (barycenter off), bits 2 and 7 always 1 -> 0xE5
+        val m = power(0x02, 0xFE, 0xFF, 0xFF, 0x85, 0xFF, 0xE5, 0xFF)
+        assertEquals(1.0, m[Metrics.DYN_8HZ]!!, 0.0)
+        assertEquals(1.0, m[Metrics.DYN_POWER_PHASE]!!, 0.0)
+        assertEquals(1.0, m[Metrics.DYN_PCO]!!, 0.0)
+        assertEquals(0.0, m[Metrics.DYN_RIDER_POSITION]!!, 0.0)
+        assertEquals(0.0, m[Metrics.DYN_BARYCENTER]!!, 0.0)
+    }
+
+    @Test
+    fun capabilitiesPageOmitsSettingsTheSensorDoesNotSupport() {
+        // mask bit 4 set = PCO not supported; everything else supported
+        val m = power(0x02, 0xFE, 0xFF, 0xFF, 0x95, 0xFF, 0xFF, 0xFF)
+        assertEquals(null, m[Metrics.DYN_PCO])
+        assertEquals(0.0, m[Metrics.DYN_POWER_PHASE]!!, 0.0) // value bit 3 = 1: off
+    }
+
+    @Test
+    fun otherSubpagesOfPage02AreNotInterpreted() {
+        assertTrue(power(0x02, 0xFD, 0xFF, 0xFF, 0x00, 0xFF, 0x00, 0xFF).isEmpty())
+    }
+
+    @Test
     fun page14TorqueBarycenterStartsAt30DegreesInHalfDegrees() {
         assertEquals(40.0, power(0x14, 20, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)[Metrics.BARYCENTER]!!, 1e-9)
     }
@@ -178,6 +204,36 @@ class DecoderFitTest {
             hrLine(2500, 65), "3000,RIDE_START", hrLine(3500, 70), "4000,RIDE_STOP")
         val hr = CaptureReader.read(lines).filter { it.metric == Metrics.HEART_RATE }.map { it.value }
         assertEquals(listOf(70.0), hr)
+    }
+
+    @Test
+    fun rideInfoTellsFinishedFromUnfinishedAndNone() {
+        val none = CaptureReader.rideInfo(sequenceOf("1000,A40340004600A1"))
+        assertEquals(null, none.startMs)
+
+        val unfinished = CaptureReader.rideInfo(sequenceOf("1000,RIDE_START", "1500,A40340004600A1"))
+        assertEquals(1000L, unfinished.startMs)
+        assertEquals(false, unfinished.finished)
+
+        val finished = CaptureReader.rideInfo(sequenceOf("1000,RIDE_START", "2000,RIDE_STOP"))
+        assertEquals(true, finished.finished)
+
+        // a second ride after a finished one, never stopped: the latest ride decides
+        val second = CaptureReader.rideInfo(sequenceOf("1000,RIDE_START", "2000,RIDE_STOP", "3000,RIDE_START"))
+        assertEquals(3000L, second.startMs)
+        assertEquals(false, second.finished)
+    }
+
+    @Test
+    fun unfinishedRideExportsEverythingAfterItsStart() {
+        fun hrLine(ts: Long, bpm: Int): String {
+            val f = Ant.encode(Ant.BROADCAST, bytes(0, 0x80, 0xFF, 0xFF, 0xFF, 0, 0, 1, bpm, 0x80, 0x1B, 0x45, 120, 0x31))
+            return "$ts,${f.hex().replace(" ", "")}"
+        }
+        // no RIDE_STOP: the app died mid-ride, the last line may even be cut off
+        val lines = sequenceOf(hrLine(500, 40), "1000,RIDE_START", hrLine(1500, 60), hrLine(2500, 70), "2600,A4")
+        val hr = CaptureReader.read(lines).filter { it.metric == Metrics.HEART_RATE }.map { it.value }
+        assertEquals(listOf(60.0, 70.0), hr)
     }
 
     @Test
