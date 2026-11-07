@@ -50,7 +50,11 @@ Tests: 32 JVM unit tests pass (`AntProtocolTest` 5, `DecoderFitTest` 27).
 3. Speed/cadence sensor test with a real sensor; wheel circumference is typed (the display owns it; no calibration helper wanted, indoor use).
 4. Small items the user may want: dim delay configurable (15 s fixed now), landscape layout (portrait locked), app icon, a better `versionName`
    (still `0.1-spike`), export of the previous unfinished ride is done, Python-side decoding for the Windows app.
-5. **Sharing the app:** signed release APK works (build described in the skill and README). Google developer verification starts affecting
+5. **Debug and release share one key and one applicationId** (debug is signed with the release key when `ANTLOGGER_SIGNING_PROPS` is
+   set), so they swap with `adb install -r`. A build made WITHOUT that variable is signed with the generic debug key and will not install
+   over one signed with the user's key (uninstalling deletes the app's captures: pull them first). Same `versionCode` reinstalls fine; a lower one
+   needs `adb install -r -d`. Never give out a debug APK.
+6. **Sharing the app:** signed release APK works (build described in the skill and README). Google developer verification starts affecting
    sideloaded apps globally in 2027: register the package under a free limited-distribution account (up to 20 devices) or pay $25 for full.
    Play Store is not worth it for one friend (new personal accounts need a closed test with 12 testers for 14 days before production).
 

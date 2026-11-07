@@ -34,6 +34,12 @@ android {
         release {
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
+        // Debug builds use the SAME key as release when the signing properties are available, so debug and
+        // release (same applicationId) can be swapped with `adb install -r` without uninstalling. Without the
+        // properties file the standard Android debug key is used. Never hand out a debug APK: it is debuggable.
+        debug {
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+        }
     }
 
     defaultConfig {

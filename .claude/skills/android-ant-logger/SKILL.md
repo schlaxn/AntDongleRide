@@ -38,6 +38,10 @@ Read `ANDROID_HANDOVER.md` (repo root) first for status and open items, then thi
 ```powershell
 $env:JAVA_HOME = (Get-ChildItem "C:\Program Files\Eclipse Adoptium" | Select-Object -First 1).FullName
 $env:ANDROID_HOME = "$env:LOCALAPPDATA\Android\Sdk"
+# debug AND release are signed with the user's key when this path is set, so they can replace each other with
+# `adb install -r` (same applicationId). Without it debug falls back to Android's generic debug key and will NOT
+# install over an app signed with the user's key (signature mismatch). The file holds a secret: pass the path only.
+$env:ANTLOGGER_SIGNING_PROPS = "E:\jschlager\keys\signing.properties"
 cd E:\jschlager\Documents\Projects\AntDongle\android
 .\gradlew.bat testDebugUnitTest assembleDebug
 # results: app\build\test-results\testDebugUnitTest\*.xml  (32 tests at last update: 5 AntProtocolTest, 27 DecoderFitTest)

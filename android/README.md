@@ -84,6 +84,9 @@ changes automatically, which exposes the password.
    Result: `app/build/outputs/apk/release/app-release.apk`.
    Raise `versionCode` in `app/build.gradle.kts` for every release you hand out.
 4. Check the signature: `apksigner verify --print-certs app-release.apk` (in the SDK's build-tools).
+When the signing properties are available, **debug builds are signed with the same key** (and have the same
+applicationId), so debug and release can replace each other with `adb install -r` without uninstalling. Do not
+hand out a debug APK: it is debuggable. Without the properties file, debug uses Android's generic debug key.
 Without `keystore.properties` a release build is produced unsigned (`app-release-unsigned.apk`).
 Google's developer verification (global from 2027) may require registering the package name and key for
 sideloaded apps; see the Android Developer Console, free "limited distribution" account for up to 20 devices.
