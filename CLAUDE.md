@@ -14,6 +14,7 @@
 - **Hard constraint: the app only listens.** Never send anything to a sensor (no calibration, crank length, capabilities or "set" commands, no acknowledged/burst data). It is enforced by `Ant.requireReadOnly` in `UsbAnt.write` with tests; do not weaken it. Any exception needs the user's explicit approval first.
 - The repo is public. Never create, write or read a file the user will put a secret into (keystore passwords, keys): assistant tooling shows file changes. Signing details live in `E:\jschlager\keys\signing.properties` (the user's), passed to Gradle through `ANTLOGGER_SIGNING_PROPS`.
 - Scratch files, screenshots and pulled captures go in `.claude/tmp` (git-ignored), never in the system temp folder.
+- Analysis scripts are in `android/analysis/`. Recordings and any personal analysis about the user (ride results, body, fit or training notes and plans) stay in git-ignored places (`.claude/tmp`, `.claude/notes`); never put them in committed files.
 - The phone is the user's personal phone: take screenshots only when asked or while they test the app, delete them afterwards, check for a running recording (`dumpsys activity services app.antlogger`) before installing, and do not tap or launch things while they use it.
 - Run the Android unit tests (`gradlew testDebugUnitTest` in `android/`) before committing; keep `ANDROID_HANDOVER.md` current when findings change.
 

@@ -92,6 +92,18 @@ The user finds the manual web import cumbersome. Findings:
 - **Test to run at the pedal test:** note acute load, activity count and weekly time before importing our file; after the import check that load did not change,
   that the import was not rejected as duplicate, and which totals moved. Then record the result here and let the user pick an option.
 
+## 5c. Pedal findings (technical; personal results are NOT kept in the repo)
+- **The Favero Assioma PRO MX-2 already sent the cycling dynamics pages** (0x10, 0x13, 0xE0, 0xE1, 0xE2, battery 0x52, product 0x50/0x51) without any write
+  from the app, so the read-only rule held. Whether other pedals need a display to enable them is unknown.
+- **Per-side data is not per crank cycle.** Pages 0xE0 (right) and 0xE1 (left) arrive about every 2.25 s per side; the counter step per update (median 2) is not the
+  number of crank turns, so per-cycle analysis from this data is invalid. Per-side values are averages over the pedal's update interval.
+- **Angle statistics.** Power-phase start angles straddle 0/360 deg: use an unwrapped median or a circular mean, never a plain mean (Garmin's plain-mean start angles are
+  skewed by the wrap). End angles and the peak-torque window do not wrap and agree with Garmin to the degree, which validates the decoding and the `.fit` export.
+- PCO sign: positive = force applied outward (away from the bike), as defined in the profile.
+- **Analysis scripts:** `android/analysis/make_report.py` (full report) and `make_sets.py` (work repetitions vs one easy section, crank diagrams), usage in their headers:
+  `python -I android/analysis/make_report.py <data folder>`. The data folder holds `capture_*.csv` and `samples_*.csv` pulled from the phone; the default is the git-ignored
+  `.claude/tmp/pedal_test`. Recordings and any personal analysis (results, body or fit notes) live only in git-ignored places (`.claude/tmp`, `.claude/notes`) and must never be committed.
+
 ## 6. What was learned (details in the skill)
 - Stick reset after ~37 s came from a thread that wrote setup commands while nobody read (serial queue overflow, event 0x34); fixed by a pure reader thread.
 - Screen lock does NOT stop recording once a foreground service holds it; my first diagnosis ("screen lock kills it") was wrong, the logs showed the real cause.

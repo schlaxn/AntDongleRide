@@ -59,6 +59,8 @@ Run the unit tests before every commit. Hand-compute test bytes from the spec ta
   and `ride_<ridestart>.fit`; Downloads gets a copy of each `.fit`. `adb pull` works. `run-as app.antlogger cat shared_prefs/settings.xml` works (debug build).
 - Capture format: `ts_ms,<raw ANT frame hex>`; `ts_ms,<hex>,T` = a frame WE sent to the stick; markers `ts,RIDE_START`, `ts,RIDE_STOP`, `ts,WHEEL_MM,<mm>`.
   Analyse with `python -I` (frame = A4 LEN ID DATA CHK; msg 0x4E broadcast with extended data: byte 9 flag 0x80, devnum bytes 10-11, devtype 12).
+- Reports from a pulled ride: `python -I android/analysis/make_report.py <data folder>` and `make_sets.py <data folder> --easy=MM:SS-MM:SS` (work repetitions vs one easy
+  section, crank diagrams). Data folder default `.claude/tmp/pedal_test`. Personal results stay in git-ignored `.claude/notes`; never commit recordings or personal analysis.
 - Device test for a code path: plant a modified capture into the files dir, restart the app, check the result, then DELETE the test files
   (also from Downloads). Used to verify recovery of unfinished rides.
 
