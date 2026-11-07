@@ -60,6 +60,34 @@ cycling dynamics) are not yet verified on real hardware.
    unplug the cable. (Lasts until the phone reboots.)
 6. `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 
+## Signed release APK (for sideloading to a friend)
+The key and its passwords live OUTSIDE the repo. Never commit or paste the key, the properties file or the
+passwords, and do not let an AI assistant create or read the properties file: assistants are shown file
+changes automatically, which exposes the password.
+1. Create the key once, in your own terminal (it asks for the password itself; keep the `.jks` and the
+   password backed up, because updates must be signed with the same key). One password is enough: for the
+   default PKCS12 keystore the key password equals the keystore password.
+   ```
+   New-Item -ItemType Directory -Force E:\jschlager\keys
+   & "C:\Program Files\Eclipse Adoptium\jdk-17.0.21.9-hotspot\bin\keytool.exe" -genkeypair -v `
+     -keystore E:\jschlager\keys\antlogger-release.jks -alias antlogger -keyalg RSA -keysize 4096 -validity 10000
+   ```
+2. In your own editor create `E:\jschlager\keys\signing.properties`:
+   ```
+   storeFile=E:/jschlager/keys/antlogger-release.jks
+   storePassword=<password>
+   keyAlias=antlogger
+   keyPassword=<same password>
+   ```
+3. Build with the path in the environment variable:
+   `$env:ANTLOGGER_SIGNING_PROPS="E:\jschlager\keys\signing.properties"; cd android; gradlew.bat assembleRelease`
+   Result: `app/build/outputs/apk/release/app-release.apk`.
+   Raise `versionCode` in `app/build.gradle.kts` for every release you hand out.
+4. Check the signature: `apksigner verify --print-certs app-release.apk` (in the SDK's build-tools).
+Without `keystore.properties` a release build is produced unsigned (`app-release-unsigned.apk`).
+Google's developer verification (global from 2027) may require registering the package name and key for
+sideloaded apps; see the Android Developer Console, free "limited distribution" account for up to 20 devices.
+
 ## Layout
 - `AntProtocol.kt` framing and checksum, `UsbAnt.kt` bulk transfer, `AntSession.kt` channels, reader and
   setup threads, watchdog, `RecorderService.kt` foreground service, `Decoder.kt` page decoding and capture

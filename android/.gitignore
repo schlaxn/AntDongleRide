@@ -6,3 +6,8 @@ local.properties
 captures/
 .tmp/
 *.apk
+*.aab
+# release signing: never commit the key or its passwords
+keystore.properties
+*.jks
+*.keystore
