@@ -58,6 +58,22 @@ Tests: 32 JVM unit tests pass (`AntProtocolTest` 5, `DecoderFitTest` 27).
    sideloaded apps globally in 2027: register the package under a free limited-distribution account (up to 20 devices) or pay $25 for full.
    Play Store is not worth it for one friend (new personal accounts need a closed test with 12 testers for 14 days before production).
 
+## 5a. Getting the .fit into Garmin Connect (investigated 7 Nov 2026; do not repeat)
+The user finds the manual web import cumbersome. Findings:
+- **The Garmin Connect Android app (5.31) cannot import activities.** It declares VIEW filters for `.fit`/`.gpx`, but opening a ride's `.fit` there starts
+  "create a new COURSE" (asks road/gravel/MTB; no indoor): a route import, not an activity upload. Its only share target is plain text (waypoints).
+  A button that opened the last ride in Garmin Connect was built, tested by the user, and removed again. Samsung's file manager also reports "no app"
+  for `.fit` (it opens with a generic MIME type that Garmin's handler does not match).
+- **No official upload API for individuals:** the Garmin Connect Developer Program (Activity API) is for approved business partners and delivers data FROM
+  Garmin; new access was reported paused in 2026. A personal API token (2026) is pull-only.
+- **Reusing the Garmin app's stored login is impossible** on a non-rooted phone (private app storage) and is not acceptable anyway.
+- **Unofficial upload with the user's Garmin password** (community libraries, undocumented endpoint): unverified, unsupported, risks the account and would
+  need internet permission and stored credentials in the app. Advised against; the user cares about security.
+- Remaining options: web import (desktop, or the phone's browser in desktop mode: the Android file picker may or may not list `.fit`; untested), or
+  a Garmin device sync trick (copy the `.fit` into the watch's activity folder over USB so the app's normal sync uploads it; unverified for the user's watch).
+- If the phone browser import works, a button that opens `connect.garmin.com` import page would remove the navigation (note: Garmin's app may claim
+  `https://connect.garmin.com/...` links; check that the page opens in the browser).
+
 ## 6. What was learned (details in the skill)
 - Stick reset after ~37 s came from a thread that wrote setup commands while nobody read (serial queue overflow, event 0x34); fixed by a pure reader thread.
 - Screen lock does NOT stop recording once a foreground service holds it; my first diagnosis ("screen lock kills it") was wrong, the logs showed the real cause.

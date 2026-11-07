@@ -93,6 +93,9 @@ restores and is swallowed), portrait only, Disconnect disabled while recording.
 - PowerShell: `Invoke-WebRequest` hangs on big downloads (use `curl.exe`); `Select-String` pipelines after native tools show exit code 255 even when the build succeeded
   (read the BUILD line); `sdkmanager --licenses` needs an input file with many `y` lines; the `!` shell prefix is Git Bash (use forward slashes there).
 - A debug build and a release build have different signatures: `adb install -r` of a release over a debug fails, and uninstalling deletes the app's captures.
+- Getting the `.fit` into Garmin Connect from the phone: do NOT build "open with Garmin Connect". The Android app opens a `.fit` as a course import (asks for a
+  track type), not as an activity. No official personal upload API exists; reusing the Garmin app's login is impossible; the password-based unofficial route is
+  advised against. See `ANDROID_HANDOVER.md` section 5a for the full findings and what is left (web import).
 - Google developer verification (enforcement for unregistered sideloaded apps from 2027): register the package under a free limited-distribution account
   (up to 20 devices) or a $25 full account; see https://developer.android.com/developer-verification/guides/faq.
 - Release build: `$env:ANTLOGGER_SIGNING_PROPS="E:\jschlager\keys\signing.properties"; .\gradlew.bat assembleRelease`, verify with
