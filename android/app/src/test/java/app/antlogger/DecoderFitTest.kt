@@ -112,6 +112,62 @@ class DecoderFitTest {
         assertEquals(2.0, m[Metrics.BATTERY_STATUS]!!, 0.0)
     }
 
+    private fun csc(t: SensorTracker, ts: Long, devType: Int, vararg b: Int) =
+        t.decode(ts, devType, 5, bytes(*b)).associate { it.metric to it.value }
+
+    @Test
+    fun combinedSensorGivesCadenceSpeedAndDistance() {
+        val t = SensorTracker(2.1)
+        // first page only primes the counters
+        assertTrue(csc(t, 0, 121, 0, 0, 0, 0, 0, 0, 0, 0).isEmpty())
+        // 1 revolution in 768/1024 s = 0.75 s: cadence 80 rpm, speed 2.1 m / 0.75 s = 2.8 m/s = 10.08 km/h
+        val m = csc(t, 750, 121, 0x00, 0x03, 1, 0, 0x00, 0x03, 1, 0)
+        assertEquals(80.0, m[Metrics.CSC_CADENCE]!!, 1e-9)
+        assertEquals(10.08, m[Metrics.SPEED_KMH]!!, 1e-9)
+        assertEquals(2.1, m[Metrics.DISTANCE_M]!!, 1e-9)
+    }
+
+    @Test
+    fun speedOnlySensorUsesBytes4to7AndCounterWrapIsHandled() {
+        val t = SensorTracker(2.0)
+        csc(t, 0, 123, 0, 0, 0, 0, 0xDC, 0xFF, 0xFF, 0xFF) // time 0xFFDC = 65500, revs 0xFFFF
+        // time wraps to 0x00C8 = 200: dT = 236 ticks; revs wrap to 1: dR = 2
+        val m = csc(t, 230, 123, 0, 0, 0, 0, 0xC8, 0x00, 0x01, 0x00)
+        val rps = 2 / (236 / 1024.0)
+        assertEquals(rps * 2.0 * 3.6, m[Metrics.SPEED_KMH]!!, 1e-9)
+    }
+
+    @Test
+    fun noNewEventForOverThreeSecondsMeansStandingStill() {
+        val t = SensorTracker(2.1)
+        csc(t, 0, 122, 0, 0, 0, 0, 100, 0, 5, 0)
+        assertTrue(csc(t, 1000, 122, 0, 0, 0, 0, 100, 0, 5, 0).isEmpty()) // same event, too early to call it
+        assertEquals(0.0, csc(t, 4500, 122, 0, 0, 0, 0, 100, 0, 5, 0)[Metrics.CSC_CADENCE]!!, 0.0)
+    }
+
+    @Test
+    fun heartRateBeatIntervalFromConsecutiveBeats() {
+        val t = SensorTracker()
+        // beat count 10 at time 1000, then count 11 at time 2024: 1024 ticks = exactly 1000 ms
+        t.decode(0, 120, 9, bytes(0x80, 0, 0, 0, 1000 and 0xFF, 1000 shr 8, 10, 60))
+        val m = t.decode(1000, 120, 9, bytes(0x00, 0, 0, 0, 2024 and 0xFF, 2024 shr 8, 11, 60))
+            .associate { it.metric to it.value }
+        assertEquals(1000.0, m[Metrics.RR_MS]!!, 1e-9)
+        assertEquals(60.0, m[Metrics.HEART_RATE]!!, 0.0)
+    }
+
+    @Test
+    fun captureReaderKeepsOnlyTheRideBetweenMarkers() {
+        fun hrLine(ts: Long, bpm: Int): String {
+            val f = Ant.encode(Ant.BROADCAST, bytes(0, 0x80, 0xFF, 0xFF, 0xFF, 0, 0, 1, bpm, 0x80, 0x1B, 0x45, 120, 0x31))
+            return "$ts,${f.hex().replace(" ", "")}"
+        }
+        val lines = sequenceOf(hrLine(1000, 50), "1500,RIDE_START", hrLine(2000, 60), hrLine(3000, 70),
+            "3500,RIDE_STOP", hrLine(4000, 80))
+        val hr = CaptureReader.read(lines).filter { it.metric == Metrics.HEART_RATE }.map { it.value }
+        assertEquals(listOf(60.0, 70.0), hr)
+    }
+
     @Test
     fun fitRoundTripCarriesCyclingDynamicsFields() {
         val t0 = 1_794_042_000_000L

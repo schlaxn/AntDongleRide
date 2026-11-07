@@ -81,7 +81,9 @@ object FitExporter {
                     hrSum += it.toLong(); hrCount++; if (it.toInt() > hrMax) hrMax = it.toInt()
                 }
                 valueAt(Metrics.POWER, t)?.let { rec.setPower(it.toInt()) }
-                valueAt(Metrics.CADENCE, t)?.let { rec.setCadence(it.toInt().toShort()) }
+                (valueAt(Metrics.CADENCE, t) ?: valueAt(Metrics.CSC_CADENCE, t))?.let { rec.setCadence(it.toInt().toShort()) }
+                valueAt(Metrics.SPEED_KMH, t)?.let { rec.setSpeed((it / 3.6).toFloat()) } // FIT speed is m/s
+                valueAt(Metrics.DISTANCE_M, t)?.let { rec.setDistance(it.toFloat()) }
                 // cycling dynamics: only the fields the FIT format (and so Garmin Connect) knows
                 valueAt(Metrics.BALANCE_RIGHT, t)?.let { rec.setLeftRightBalance((0x80 or it.toInt()).toShort()) } // bit 7 = right
                 valueAt(Metrics.TE_LEFT, t)?.let { rec.setLeftTorqueEffectiveness(it.toFloat()) }

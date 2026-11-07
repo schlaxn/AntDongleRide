@@ -33,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var button: Button
     private lateinit var dimButton: Button
     private lateinit var dynStatusView: TextView
+    private lateinit var recordButton: Button
     private lateinit var liveView: LiveView
     private val ui = Handler(Looper.getMainLooper())
 
@@ -53,11 +54,20 @@ class MainActivity : Activity() {
                     .joinToString("\n") { "${it.key}  x${it.value}" }
                     .ifEmpty { "no broadcast pages yet" }
                 summary.text = "last data: $age   stick resets: ${s.resets}\n$pages"
-                status.text = "recording to ${RecorderService.logFile?.name}"
-                button.text = "Stop"
+                status.text = (if (s.rideActive) "RECORDING ride, " else "connected, not recording, ") +
+                    "raw log ${RecorderService.logFile?.name}"
+                button.text = "Stop and disconnect"
                 dynStatusView.text = s.dynStatus
+                recordButton.isEnabled = !s.rideActive && s.heartRateLive()
+                recordButton.text = when {
+                    s.rideActive -> "Recording..."
+                    s.heartRateLive() -> "Start recording"
+                    else -> "Start recording (waiting for heart rate...)"
+                }
             } else {
-                button.text = "Connect and record"
+                button.text = "Connect"
+                recordButton.isEnabled = false
+                recordButton.text = "Start recording (connect first)"
             }
             liveView.invalidate()
             logView.text = RecorderService.lines.toList().takeLast(40).joinToString("\n")
@@ -72,7 +82,29 @@ class MainActivity : Activity() {
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 48, 24, 24) }
         status = TextView(this).apply { textSize = 16f; text = "idle" }
-        button = Button(this).apply { text = "Connect and record"; setOnClickListener { onButton() } }
+        button = Button(this).apply { text = "Connect"; setOnClickListener { onButton() } }
+        recordButton = Button(this).apply {
+            text = "Start recording (connect first)"
+            isEnabled = false
+            setOnClickListener { RecorderService.session?.beginRide() }
+        }
+        val wheelPrefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val wheelEdit = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            hint = "Wheel circumference in mm (speed sensor)"
+            setText(wheelPrefs.getInt("wheel_mm", 2105).toString())
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val mm = s?.toString()?.toIntOrNull() ?: return
+                    if (mm in 1000..3000) {
+                        wheelPrefs.edit().putInt("wheel_mm", mm).apply()
+                        RecorderService.session?.wheelM = mm / 1000.0
+                    }
+                }
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            })
+        }
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         dimButton = Button(this).apply {
             setOnClickListener {
@@ -99,6 +131,8 @@ class MainActivity : Activity() {
         liveView = LiveView(this) { RecorderService.session }
         root.addView(status)
         root.addView(button)
+        root.addView(recordButton)
+        root.addView(wheelEdit)
         root.addView(dynSwitch)
         root.addView(dynStatusView)
         root.addView(liveView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))

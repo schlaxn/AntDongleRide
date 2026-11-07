@@ -39,7 +39,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         if (x == null) "-" else "%.${digits}f$unit".format(x)
 
     override fun onMeasure(w: Int, h: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(w), (790 * d).toInt())
+        setMeasuredDimension(MeasureSpec.getSize(w), (930 * d).toInt())
     }
 
     /** A 0-100 % bar with the value printed at its right end. */
@@ -180,8 +180,21 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         val bs = when (v(Metrics.BATTERY_STATUS)?.toInt()) {
             1 -> "new"; 2 -> "good"; 3 -> "ok"; 4 -> "low"; 5 -> "critical"; else -> "-"
         }
-        label(c, "Battery: ${fmt(bv, 2, " V")} ($bs)", pad, y, 14f)
-        label(c, "HR: ${fmt(v(Metrics.HEART_RATE))}", w / 2, y, 14f)
+        label(c, "Pedal battery: ${fmt(bv, 2, " V")} ($bs)", pad, y, 14f)
+        y += 40 * d
+
+        // other ANT+ sensors: heart rate (required to record), speed and cadence (optional)
+        label(c, "Other sensors", pad, y, 12f, dim)
+        y += 34 * d
+        val hr = v(Metrics.HEART_RATE)
+        label(c, fmt(hr), pad, y + 10 * d, 44f, if (hr == null) Color.rgb(200, 40, 40) else fg)
+        label(c, "bpm", pad + 100 * d, y + 10 * d, 14f, dim)
+        label(c, "RR ${fmt(v(Metrics.RR_MS), 0, " ms")}", pad, y + 32 * d, 12f, dim)
+        label(c, fmt(v(Metrics.SPEED_KMH), 1), w / 2, y + 10 * d, 44f)
+        label(c, "km/h", w / 2 + 112 * d, y + 10 * d, 14f, dim)
+        y += 62 * d
+        label(c, "Sensor cadence: ${fmt(v(Metrics.CSC_CADENCE), 0, " rpm")}", pad, y, 14f)
+        label(c, "Distance: ${fmt(v(Metrics.DISTANCE_M)?.div(1000.0), 2, " km")}", w / 2, y, 14f)
     }
 
     companion object {

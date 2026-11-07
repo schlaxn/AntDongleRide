@@ -62,7 +62,9 @@ class RecorderService : Service() {
                 lines.addLast(line)
                 while (lines.size > 120) lines.pollFirst()
             }
-            s.enableDynamics = getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("dyn", true)
+            val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+            s.enableDynamics = prefs.getBoolean("dyn", true)
+            s.wheelM = prefs.getInt("wheel_mm", 2105) / 1000.0
             session = s
             s.start()
         } catch (e: Exception) {

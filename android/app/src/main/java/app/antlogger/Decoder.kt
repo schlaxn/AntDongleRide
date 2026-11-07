@@ -11,6 +11,10 @@ data class Sample(
 
 object Metrics {
     const val HEART_RATE = "heart_rate"
+    const val RR_MS = "rr_interval_ms" // beat-to-beat interval from the heart-rate strap
+    const val SPEED_KMH = "speed_kmh" // from a speed or speed/cadence sensor
+    const val DISTANCE_M = "distance_m" // wheel revolutions x wheel circumference, since connect
+    const val CSC_CADENCE = "sensor_cadence" // from a cadence or speed/cadence sensor
     const val POWER = "power"
     const val CADENCE = "cadence"
     const val BALANCE_RIGHT = "pedal_balance_right" // % of power from the right pedal
@@ -147,14 +151,103 @@ object Decoder {
     }
 }
 
-/** Reads the raw capture CSV (`ts_ms,hex[,T]` per ANT frame; T = sent by us) into samples. */
+/**
+ * Stateful decoding on top of [Decoder]: speed, cadence and distance from the 1/1024 s event-time and
+ * cumulative-revolution counters of speed/cadence sensors (device types 121, 122, 123), and beat-to-beat
+ * intervals from heart-rate pages. One instance per session; not thread-safe.
+ */
+class SensorTracker(@Volatile var wheelM: Double = 2.105) {
+    private class Ev(var t: Int, var revs: Int, var lastChangeMs: Long)
+
+    private val prev = HashMap<String, Ev>()
+    private val distance = HashMap<String, Double>()
+    private val lastBeat = HashMap<Int, IntArray>() // devNum -> (count, time)
+
+    /** Revolutions per second since the previous event, 0 when nothing moved for 3 s, null if unknown. */
+    private fun rate(key: String, ts: Long, t: Int, revs: Int): Pair<Double, Int>? {
+        val e = prev[key]
+        if (e == null) {
+            prev[key] = Ev(t, revs, ts)
+            return null
+        }
+        val dT = (t - e.t) and 0xFFFF
+        val dR = (revs - e.revs) and 0xFFFF
+        if (dT == 0) return if (ts - e.lastChangeMs > 3000) 0.0 to 0 else null
+        e.t = t; e.revs = revs; e.lastChangeMs = ts
+        val rps = dR / (dT / 1024.0)
+        return if (rps > 10.0) null else rps to dR // > 600 rpm: a counter glitch, ignore
+    }
+
+    fun decode(tsMs: Long, devType: Int, devNum: Int, p: ByteArray): List<Sample> {
+        val out = ArrayList(Decoder.decode(tsMs, devType, devNum, p))
+        fun u8(i: Int) = p[i].toInt() and 0xFF
+        fun u16(i: Int) = u8(i) or (u8(i + 1) shl 8)
+        fun cadence(t: Int, revs: Int) {
+            rate("c$devType:$devNum", tsMs, t, revs)?.let { out += Sample(tsMs, devType, devNum, Metrics.CSC_CADENCE, it.first * 60.0) }
+        }
+        fun speed(t: Int, revs: Int) {
+            val key = "s$devType:$devNum"
+            rate(key, tsMs, t, revs)?.let { (rps, dR) ->
+                out += Sample(tsMs, devType, devNum, Metrics.SPEED_KMH, rps * wheelM * 3.6)
+                val dist = (distance[key] ?: 0.0) + dR * wheelM
+                distance[key] = dist
+                out += Sample(tsMs, devType, devNum, Metrics.DISTANCE_M, dist)
+            }
+        }
+        when (devType) {
+            121 -> { // combined sensor: bytes 0-1 cadence time, 2-3 cadence revs, 4-5 speed time, 6-7 speed revs
+                cadence(u16(0), u16(2))
+                speed(u16(4), u16(6))
+            }
+            122 -> cadence(u16(4), u16(6)) // bytes 4-5 event time, 6-7 cumulative revolutions
+            123 -> speed(u16(4), u16(6))
+            Decoder.DEV_HR -> { // bytes 4-5 beat time (1/1024 s), byte 6 beat count
+                val count = u8(6)
+                val time = u16(4)
+                val last = lastBeat[devNum]
+                if (last == null) {
+                    lastBeat[devNum] = intArrayOf(count, time)
+                } else if (count != last[0]) {
+                    if (((count - last[0]) and 0xFF) == 1) {
+                        val rr = ((time - last[1]) and 0xFFFF) * 1000.0 / 1024.0
+                        if (rr in 200.0..2500.0) out += Sample(tsMs, devType, devNum, Metrics.RR_MS, rr)
+                    }
+                    lastBeat[devNum] = intArrayOf(count, time)
+                }
+            }
+        }
+        return out
+    }
+}
+
+/**
+ * Reads the raw capture CSV into samples. Lines are `ts_ms,hex` per ANT frame (`ts_ms,hex,T` = frame we
+ * sent) or markers: `ts_ms,RIDE_START`, `ts_ms,RIDE_STOP`, `ts_ms,WHEEL_MM,<mm>`. When a ride start marker
+ * exists, only samples from it up to the stop marker are returned; old captures without markers are
+ * returned whole.
+ */
 object CaptureReader {
     fun read(lines: Sequence<String>): List<Sample> {
+        val all = lines.toList()
+        var start = Long.MIN_VALUE
+        var stop = Long.MAX_VALUE
+        var wheelM = 2.105
+        for (line in all) {
+            val parts = line.split(',')
+            if (parts.size < 2) continue
+            val ts = parts[0].toLongOrNull() ?: continue
+            when (parts[1].trim()) {
+                "RIDE_START" -> if (start == Long.MIN_VALUE) start = ts
+                "RIDE_STOP" -> stop = ts
+                "WHEEL_MM" -> parts.getOrNull(2)?.trim()?.toDoubleOrNull()?.let { if (start == Long.MIN_VALUE) wheelM = it / 1000.0 }
+            }
+        }
+        val tracker = SensorTracker(wheelM)
         val out = ArrayList<Sample>()
         val last = HashMap<String, ByteArray>()
-        for (line in lines) {
+        for (line in all) {
             val parts = line.split(',')
-            if (parts.size < 2 || parts.size > 2) continue // 3 parts = frame we sent (T)
+            if (parts.size != 2) continue // 3 parts = frame we sent (T) or a marker with a value
             val ts = parts[0].toLongOrNull() ?: continue
             val hex = parts[1].trim()
             if (hex.length < 10 || hex.length % 2 != 0) continue // truncated tail line
@@ -171,7 +264,8 @@ object CaptureReader {
                     if (last[key]?.contentEquals(b.payload) == true) continue
                     last[key] = b.payload
                 }
-                out += Decoder.decode(ts, b.devType, b.devNum, b.payload)
+                val samples = tracker.decode(ts, b.devType, b.devNum, b.payload)
+                if (ts in start..stop) out += samples // decode always, so counters stay in step
             }
         }
         return out

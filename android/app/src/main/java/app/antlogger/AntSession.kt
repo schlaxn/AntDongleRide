@@ -55,6 +55,7 @@ class AntSession(
     private val logLock = Any()
     private var rawWriter: Writer? = null
     private var samplesWriter: Writer? = null
+    private val tracker = SensorTracker()
 
     // ---------- writing (setup thread only) ----------
     private fun logRaw(raw: ByteArray, tx: Boolean) {
@@ -91,9 +92,38 @@ class AntSession(
         listen(0, 120)
         listen(1, 11)
         listen(2, 11)
-        listen(3, 121)
+        listen(3, 121) // combined speed and cadence sensor
+        listen(4, 122) // cadence-only sensor
+        listen(5, 123) // speed-only sensor
         configured = true
     }
+
+    // ---------- ride gating ----------
+    /** True when a heart-rate signal arrived within the last 4 s. */
+    fun heartRateLive(): Boolean =
+        live[Metrics.HEART_RATE]?.let { System.currentTimeMillis() - it.second <= 4000 } == true
+
+    @Volatile var rideActive = false
+        private set
+
+    /** Starts the ride (samples file, start marker). Refused while no heart rate is received. */
+    fun beginRide(): Boolean {
+        if (rideActive || !heartRateLive()) return false
+        synchronized(logLock) {
+            val now = System.currentTimeMillis()
+            samplesWriter = samplesLog.bufferedWriter().also { it.write("ts_ms,devtype,devnum,metric,value\n") }
+            rawWriter?.write("$now,WHEEL_MM,${(tracker.wheelM * 1000).toInt()}\n")
+            rawWriter?.write("$now,RIDE_START\n")
+            rawWriter?.flush()
+            rideActive = true
+        }
+        return true
+    }
+
+    /** Wheel circumference in metres, used for speed and distance. */
+    var wheelM: Double
+        get() = tracker.wheelM
+        set(v) { tracker.wheelM = v }
 
     private fun listen(channel: Int, devType: Int) {
         val period = Ant.DEVICE_TYPES.getValue(devType).second
@@ -199,8 +229,7 @@ class AntSession(
     // ---------- lifecycle ----------
     fun start() {
         running = true
-        rawWriter = rawLog.bufferedWriter()
-        samplesWriter = samplesLog.bufferedWriter().also { it.write("ts_ms,devtype,devnum,metric,value\n") }
+        rawWriter = rawLog.bufferedWriter() // raw frames are logged from connect on, the ride from the marker
         // Reader: only ever reads and logs, so the stick's output queue can never back up.
         readerThread = Thread({
             try {
@@ -287,7 +316,7 @@ class AntSession(
                 lastPayload[key] = b.payload
             }
         }
-        for (s in Decoder.decode(now, b.devType, b.devNum, b.payload)) {
+        for (s in tracker.decode(now, b.devType, b.devNum, b.payload)) {
             live[s.metric] = s.value to now
             synchronized(logLock) {
                 samplesWriter?.write("${s.tsMs},${s.devType},${s.devNum},${s.metric},${s.value}\n")
@@ -321,6 +350,10 @@ class AntSession(
     }
 
     fun stop() {
+        if (rideActive) synchronized(logLock) {
+            rawWriter?.write("${System.currentTimeMillis()},RIDE_STOP\n")
+            rawWriter?.flush()
+        }
         running = false
         setupThread?.interrupt()
         setupThread?.join(2000)
