@@ -78,6 +78,20 @@ The user finds the manual web import cumbersome. Findings:
   and shown on the phone; the tap itself has not been tested by me.
 - Not tried: a Garmin device sync trick (copy the `.fit` into the watch's activity folder over USB so the app's normal sync uploads it; unverified).
 
+## 5b. Training load, recovery and importing next to the watch (thought of 7 Nov 2026, not yet tested)
+- **Finding (user forum reports, nothing official):** Garmin computes Training Effect, Training Load and Recovery Time ON THE DEVICE while it records and
+  stores them in the file; Garmin Connect mostly reads them back. Third-party files (MyWhoosh, Zwift, FulGaz imports) reportedly get no load, so they do not feed
+  Training Status or Recovery Time. Our `.fit` has manufacturer DEVELOPMENT and no load fields, so no load is expected. Unverified for our file.
+  A reported workaround is editing the file to claim a Garmin manufacturer; deliberately NOT built (it would misstate where the data came from).
+- **The user's idea:** let the Forerunner record the ride as well (it provides the load and recovery from its own heart rate) and import our file too.
+  Load/recovery would then not be doubled IF our import adds none. But activity count and total time ARE doubled (two rides for the same hour); our file has no
+  calories so those are not doubled; intensity minutes unknown; Garmin may reject an import it takes for a duplicate (close start times); Garmin Connect has no
+  merge function. Our file would carry the power, cadence and dynamics (and speed/distance only if a speed sensor is connected).
+- **Options for the user:** (1) import both and accept doubled time; (2) keep the watch ride in Garmin for load and totals and keep our file as the detailed
+  dataset for the custom analysis, importing it only when the power curves should be in Garmin (recommended); (3) import ours and delete the watch ride (loses load).
+- **Test to run at the pedal test:** note acute load, activity count and weekly time before importing our file; after the import check that load did not change,
+  that the import was not rejected as duplicate, and which totals moved. Then record the result here and let the user pick an option.
+
 ## 6. What was learned (details in the skill)
 - Stick reset after ~37 s came from a thread that wrote setup commands while nobody read (serial queue overflow, event 0x34); fixed by a pure reader thread.
 - Screen lock does NOT stop recording once a foreground service holds it; my first diagnosis ("screen lock kills it") was wrong, the logs showed the real cause.
