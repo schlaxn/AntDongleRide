@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dynastream ANT USB stick 2 (0x1008 = 4104) and ANT USB-m (0x1009 = 4105), vendor 0x0FCF = 4047 -->
+    <usb-device vendor-id="4047" product-id="4104" />
+    <usb-device vendor-id="4047" product-id="4105" />
+</resources>
