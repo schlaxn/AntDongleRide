@@ -37,8 +37,7 @@ abstract class DashView(context: Context, protected val session: () -> AntSessio
         return if (System.currentTimeMillis() - p.second <= staleMs) p.first else null
     }
 
-    protected fun fmt(x: Double?, digits: Int = 0, unit: String = "") =
-        if (x == null) "-" else "%.${digits}f$unit".format(x)
+    protected fun fmt(x: Double?, digits: Int = 0, unit: String = "") = formatValue(x, digits, unit)
 
     protected fun label(c: Canvas, s: String, x: Float, y: Float, size: Float, color: Int = fg, align: Paint.Align = Paint.Align.LEFT) {
         text.textSize = size
