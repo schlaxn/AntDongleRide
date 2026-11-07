@@ -20,7 +20,6 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Switch
 import android.widget.TextView
 import java.io.File
 
@@ -59,7 +58,6 @@ class MainActivity : Activity() {
                 // disconnecting mid-ride would end the ride by accident: stop recording first
                 button.isEnabled = !s.rideActive
                 button.text = if (s.rideActive) "Disconnect (stop recording first)" else "Disconnect"
-                dynStatusView.text = s.dynStatus
                 recordButton.isEnabled = s.rideActive || s.heartRateLive()
                 recordButton.text = when {
                     s.rideActive -> "Stop recording"
@@ -129,21 +127,15 @@ class MainActivity : Activity() {
         }
         summary = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE }
         logView = TextView(this).apply { textSize = 10f; typeface = Typeface.MONOSPACE }
-        dynStatusView = TextView(this).apply { textSize = 12f }
-        val dynSwitch = Switch(this).apply {
-            text = "Ask pedals for cycling dynamics (8 Hz)"
-            isChecked = prefs.getBoolean("dyn", true)
-            setOnCheckedChangeListener { _, on ->
-                prefs.edit().putBoolean("dyn", on).apply()
-                RecorderService.session?.enableDynamics = on
-            }
+        dynStatusView = TextView(this).apply {
+            textSize = 12f
+            text = "Read-only: this app only listens and never sends anything to your sensors."
         }
         liveView = LiveView(this) { RecorderService.session }
         root.addView(status)
         root.addView(button)
         root.addView(recordButton)
         root.addView(wheelEdit)
-        root.addView(dynSwitch)
         root.addView(dynStatusView)
         root.addView(liveView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(summary)

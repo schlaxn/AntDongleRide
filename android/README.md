@@ -5,6 +5,26 @@ vendor service: the app talks to the stick directly through the Android USB Host
 `../ant/`). Recording runs in a foreground service, so it survives a locked screen. Raw ANT frames are
 always logged; `.fit` export is built from that raw log.
 
+## HARD CONSTRAINT: read-only, never write to sensors
+This app only **listens**. It must never transmit anything to a sensor, in particular nothing that can
+change a power meter's configuration: no calibration or zero offset, no crank length, no capabilities or
+8 Hz / cycling-dynamics "set" commands, no acknowledged or burst data of any kind. Calibration and crank
+length are done with the official app (for example the Favero Assioma app when moving the pedals to a new
+bike). A wrong write over ANT+ could damage expensive pedals, so there is no write path at all.
+
+How it is enforced:
+- The only messages the app sends are the ones that configure the **stick itself** (reset, network key,
+  receive channels, search timeouts, extended data, open/close). The whitelist is `Ant.STICK_CONFIG_MSGS`
+  in `AntProtocol.kt`.
+- Every byte sent to the stick passes through `UsbAnt.write`, which calls `Ant.requireReadOnly` and throws
+  for anything else (broadcast, acknowledged, burst, advanced burst, ...). Unit tests in
+  `AntProtocolTest.kt` cover this. Do not weaken or bypass it.
+- Consequence: the cycling dynamics pages that need a display to enable them (power phase 0xE0/0xE1, PCO and
+  rider position 0xE2, torque barycenter 0x14; ANT+ Bicycle Power profile 4.5.2) only arrive if some other
+  device has already switched them on. Standard pages (power, balance 0x10, torque effectiveness and pedal
+  smoothness 0x13, battery) need no enabling. An earlier version that sent the enable command exists in git
+  history (commit b7fda8d) and was removed on purpose.
+
 Status: Phase 1 spike. Verified with a heart-rate watch only. Pedal pages (power, balance,
 cycling dynamics) are not yet verified on real hardware.
 

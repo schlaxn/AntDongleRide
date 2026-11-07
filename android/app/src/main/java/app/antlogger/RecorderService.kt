@@ -66,7 +66,6 @@ class RecorderService : Service() {
                 while (lines.size > 120) lines.pollFirst()
             }
             val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
-            s.enableDynamics = prefs.getBoolean("dyn", true)
             s.wheelM = prefs.getInt("wheel_mm", 2105) / 1000.0
             session = s
             s.start()

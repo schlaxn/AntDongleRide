@@ -17,7 +17,11 @@ class UsbAnt private constructor(
 ) {
     private val readBuf = ByteArray(64)
 
-    fun write(data: ByteArray): Boolean = conn.bulkTransfer(epOut, data, data.size, 1000) >= 0
+    /** The single choke point for everything sent to the stick: only stick-configuration messages pass. */
+    fun write(data: ByteArray): Boolean {
+        Ant.requireReadOnly(data)
+        return conn.bulkTransfer(epOut, data, data.size, 1000) >= 0
+    }
 
     /** Returns the bytes read, or an empty array on timeout. */
     fun read(timeoutMs: Int = 100): ByteArray {

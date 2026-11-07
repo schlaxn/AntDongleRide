@@ -43,7 +43,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         if (x == null) "-" else "%.${digits}f$unit".format(x)
 
     override fun onMeasure(w: Int, h: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(w), (930 * d).toInt())
+        setMeasuredDimension(MeasureSpec.getSize(w), (950 * d).toInt())
     }
 
     /** A 0-100 % bar with the value printed at its right end. */
@@ -143,7 +143,13 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         } else {
             label(c, "-", pad + bw / 2, by + 19 * d, 14f, dim, Paint.Align.CENTER)
         }
-        y = by + 52 * d
+        // power per pedal, derived: total power x balance share
+        val pw = v(Metrics.POWER)
+        val lw = if (pw != null && r != null) pw * (100 - r) / 100 else null
+        val rw = if (pw != null && r != null) pw * r / 100 else null
+        label(c, "L ${fmt(lw, 0, " W")}", pad, by + 46 * d, 14f, left)
+        label(c, "R ${fmt(rw, 0, " W")}", pad + bw, by + 46 * d, 14f, right, Paint.Align.RIGHT)
+        y = by + 70 * d
 
         // torque effectiveness and pedal smoothness
         val half = (bw - 16 * d) / 2

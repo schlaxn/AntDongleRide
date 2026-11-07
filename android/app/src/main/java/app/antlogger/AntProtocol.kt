@@ -36,6 +36,25 @@ object Ant {
         123 to ("Bike speed" to 8118),
     )
 
+    /**
+     * HARD CONSTRAINT: this app only listens. The only messages it may send are the ones that configure
+     * the stick itself (reset, network key, receive channels, search timeouts, extended data, open/close).
+     * Everything that could put data on the air toward a sensor (broadcast, acknowledged, burst, advanced
+     * burst, ...) is not on this list and is refused.
+     */
+    val STICK_CONFIG_MSGS = setOf(
+        RESET, SET_NET_KEY, ASSIGN_CH, SET_CH_ID, SET_PERIOD, SET_RF_FREQ,
+        SET_HP_SEARCH_TIMEOUT, SET_LP_SEARCH_TIMEOUT, ENABLE_EXT, OPEN_CH, CLOSE_CH,
+    )
+
+    /** Throws unless [raw] is a well-formed frame carrying one of [STICK_CONFIG_MSGS]. */
+    fun requireReadOnly(raw: ByteArray) {
+        val id = if (raw.size >= 4) raw[2].toInt() and 0xFF else -1
+        check(raw.size >= 4 && (raw[0].toInt() and 0xFF) == SYNC && id in STICK_CONFIG_MSGS) {
+            "read-only app: refusing to send ANT message 0x%02X".format(id and 0xFF)
+        }
+    }
+
     fun checksum(body: ByteArray, len: Int = body.size): Int {
         var c = 0
         for (i in 0 until len) c = c xor (body[i].toInt() and 0xFF)
