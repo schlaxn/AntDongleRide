@@ -11,17 +11,24 @@ class PowerModelTests(unittest.TestCase):
         self.m = TrainerPowerModel()
 
     def test_matches_both_reference_points(self):
-        self.assertAlmostEqual(self.m.resistance_w(20), 145, places=6)
-        self.assertAlmostEqual(self.m.resistance_w(40), 540, places=6)
+        self.assertAlmostEqual(self.m.resistance_w(20), 105, places=6)
+        self.assertAlmostEqual(self.m.resistance_w(40), 406, places=6)  # extrapolated point
 
-    def test_exponent_is_about_1_9(self):
-        self.assertAlmostEqual(self.m.exponent, 1.897, places=2)
+    def test_exponent_is_about_1_95(self):
+        # measured with the Favero Assioma pedals, settled state: exponent 1.95
+        self.assertAlmostEqual(self.m.exponent, 1.95, places=2)
 
-    def test_matches_manufacturer_chart(self):
-        # values read from the Power-vs-Speed chart, tolerance covers reading error
-        for speed, chart_w, tol in ((10, 40, 15), (30, 300, 25), (50, 830, 60), (60, 1200, 80)):
+    def test_matches_the_measured_curve(self):
+        # pedal power at quasi-steady speeds (settled state, 7 Nov 2026), within the fit scatter (~3.5 %)
+        for speed, measured_w, tol in ((16, 68, 3), (20, 105, 0.01), (25, 162, 4), (30, 232, 6)):
             with self.subTest(speed=speed):
-                self.assertLess(abs(self.m.resistance_w(speed) - chart_w), tol)
+                self.assertLess(abs(self.m.resistance_w(speed) - measured_w), tol)
+
+    def test_is_below_the_manufacturer_chart(self):
+        # the chart reads ~300 W at 30 km/h; the measurement is about 23 % lower (documented, intended)
+        ratio = self.m.resistance_w(30) / 300.0
+        self.assertGreater(ratio, 0.70)
+        self.assertLess(ratio, 0.85)
 
     def test_zero_speed_zero_power(self):
         self.assertEqual(self.m.resistance_w(0), 0)

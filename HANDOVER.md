@@ -15,9 +15,12 @@ ride, with interval workouts, ghost riders, virtual speed/power/gearing, and rec
   (`libusb0.dll` in System32). Combined speed & cadence sensor (type 121, device 53894, used for
   speed and cadence), an older Garmin speed-only sensor (type 123, device 48791), a heart-rate
   broadcast (type 120, device 17691), and the watch over BLE through the laptop's Bluetooth.
-- **Trainer:** Elite Qubo Power Fluid (red roller). Power model fixed by two points: 145 W at
-  20 km/h (user measurement) and 540 W at 40 km/h (rating). Exponent ~1.90. Checked against the
-  manufacturer chart (40 W @ 10, 300 W @ 30, 830 W @ 50, 1200 W @ 60 km/h).
+- **Trainer:** Elite Qubo Power Fluid (red roller). Power model fitted to power measured with
+  Favero Assioma pedals (7 Nov 2026, settled state after ~10-15 min): 105 W at 20 km/h, exponent
+  1.95 (R2 0.99, measured over 14-32 km/h; the 406 W at 40 km/h is extrapolated). It replaced
+  the first calibration (145 W at 20 km/h, 540 W at 40 km/h, exponent 1.90), which overestimated
+  the measured power by 27-39 %; the manufacturer chart (300 W at 30 km/h) is also ~23 % above
+  the measurement. In the first ~10 minutes the same speed took ~20 % less power (83 W at 20 km/h).
 - **Rider:** 184 cm, 91 cm inseam, system weight 76 kg (rider + bike).
 - **Bike:** Orbea Orca, 57 cm frame, 73°/73° head and seat tube, 58 cm effective top tube (slight
   slope up towards the head tube), 810 mm saddle height (measured along the seat tube from the

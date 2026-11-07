@@ -1,13 +1,18 @@
 """Virtual power for an Elite Qubo Power Fluid roller (no power meter).
 
-Fluid trainers absorb power roughly with a power law of speed. Two reference points
-fix the curve exactly:
-    145 W at 20 km/h   (user measurement)
-    540 W at 40 km/h   (manufacturer rating)
-which gives P = 145 * (v / 20) ** n with n = ln(540/145) / ln(2) ~= 1.90.
+Fluid trainers absorb power roughly with a power law of speed. The curve is fitted to
+power measured with Favero Assioma pedals (7 Nov 2026) in the settled state, after about
+10-15 minutes of riding (a 50 minute interval ride, quasi-steady seconds only):
+    105 W at 20 km/h, exponent 1.95   (R2 0.99 over 14-32 km/h)
+The 40 km/h point (406 W) is the same power law extrapolated: nothing was measured above
+about 32 km/h. This gives P = 105 * (v / 20) ** n with n = ln(406/105) / ln(2) ~= 1.95.
 
-Checked against the manufacturer's Power-vs-Speed chart: ~40 W @10, ~300 W @30,
-~830 W @50, ~1200 W @60 km/h, all within the chart's reading accuracy.
+History: the first calibration (145 W at 20 km/h from a user measurement, 540 W at 40 km/h
+from the manufacturer rating, exponent 1.90) overestimated the measured power by 27-39 %;
+the manufacturer chart reads about 300 W at 30 km/h where the pedals measured about 231 W.
+In the first ~10 minutes the same speed took about 20 % less power (83 W at 20 km/h); this
+model uses the settled state. Pedal power is measured at the crank and includes drivetrain
+losses of a few percent.
 
 Flywheel inertia adds power while the speed changes: a solid disc of mass m rolling at
 surface speed v stores 0.5*m*v^2, so its kinetic power is 0.5*m*v*dv/dt (radius cancels).
@@ -17,9 +22,9 @@ import math
 from dataclasses import dataclass
 
 REF_SPEED_KMH = 20.0
-REF_POWER_W = 145.0
+REF_POWER_W = 105.0
 TOP_SPEED_KMH = 40.0
-TOP_POWER_W = 540.0
+TOP_POWER_W = 406.0   # extrapolated with the measured exponent, not measured
 FLYWHEEL_KG = 1.7
 
 
