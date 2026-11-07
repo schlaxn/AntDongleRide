@@ -3,6 +3,9 @@
 Read this first in a new session. It describes the state of the project, how it runs, what is
 still open, and how the user likes to work.
 
+The Android ANT+ logger (`android/`) and the rowing app have their own handovers:
+`ANDROID_HANDOVER.md` and `ROWER_HANDOVER.md`.
+
 ## 1. What the project is
 
 A Python (Flask) server plus a browser 3D view that turns a real bike on a trainer into a virtual
