@@ -326,7 +326,6 @@ class MainActivity : Activity() {
             setPadding((dm.widthPixels * 0.02f).toInt(), 0, (dm.widthPixels * 0.02f).toInt(), 0)
             // controls first, right under the banner; heart rate and power are in the banner
             addView(connectButton, weight(1.0f)); gap(connectButton)
-            addView(recordButton, weight(1.2f)); gap(recordButton)
             addView(garminButton, weight(1.0f)); gap(garminButton)
             addView(dimCheck, weight(0.8f))
             addView(wheelRow, weight(0.8f))
@@ -341,7 +340,8 @@ class MainActivity : Activity() {
         liveView = LiveView(this) { RecorderService.session }
         livePage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(liveView, weight(1f)) // the whole page; start/stop lives on the Setup page
+            addView(recordButton, weight(1.0f)); gap(recordButton) // same place and size as Connect on Setup
+            addView(liveView, weight(11f)) // the dashboard fills the rest of the page
         }
 
         // ---------- navigation ----------
