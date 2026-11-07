@@ -44,6 +44,101 @@ class DecoderFitTest {
         assertEquals(setOf("power"), m.keys)
     }
 
+    private fun power(vararg b: Int) =
+        Decoder.decode(0, Decoder.DEV_POWER, 7, bytes(*b)).associate { it.metric to it.value }
+
+    @Test
+    fun page13TorqueEffectivenessAndPedalSmoothnessInHalfPercent() {
+        // L TE 80 -> 40 %, R TE 90 -> 45 %, L PS 160 -> 80 %, R PS 170 -> 85 %
+        val m = power(0x13, 1, 80, 90, 160, 170, 0xFF, 0xFF)
+        assertEquals(40.0, m[Metrics.TE_LEFT]!!, 0.0)
+        assertEquals(45.0, m[Metrics.TE_RIGHT]!!, 0.0)
+        assertEquals(80.0, m[Metrics.PS_LEFT]!!, 0.0)
+        assertEquals(85.0, m[Metrics.PS_RIGHT]!!, 0.0)
+    }
+
+    @Test
+    fun page13CombinedSmoothnessWhenByte5IsFE() {
+        val m = power(0x13, 1, 0xFF, 0xFF, 150, 0xFE, 0xFF, 0xFF)
+        assertEquals(75.0, m[Metrics.PS_COMBINED]!!, 0.0)
+        assertEquals(null, m[Metrics.PS_LEFT])
+        assertEquals(null, m[Metrics.TE_LEFT]) // 0xFF = invalid
+    }
+
+    @Test
+    fun pageE0RightForceAngleBradsToDegrees() {
+        // start 64 brads = 90 deg, end 192 = 270 deg, peak 96 = 135 deg .. 160 = 225 deg, torque 0x0140 = 10 Nm
+        val m = power(0xE0, 3, 64, 192, 96, 160, 0x40, 0x01)
+        assertEquals(90.0, m[Metrics.fa("right", "start_deg")]!!, 1e-9)
+        assertEquals(270.0, m[Metrics.fa("right", "end_deg")]!!, 1e-9)
+        assertEquals(135.0, m[Metrics.fa("right", "peak_start_deg")]!!, 1e-9)
+        assertEquals(225.0, m[Metrics.fa("right", "peak_end_deg")]!!, 1e-9)
+        assertEquals(10.0, m[Metrics.fa("right", "torque_nm")]!!, 1e-9)
+    }
+
+    @Test
+    fun pageE1IsLeftAndC0C0MeansInvalidAngles() {
+        val m = power(0xE1, 3, 0xC0, 0xC0, 0xC0, 0xC0, 0, 0)
+        assertEquals(setOf(Metrics.fa("left", "torque_nm")), m.keys)
+    }
+
+    @Test
+    fun pageE2PedalPositionRiderPositionCadenceAndPco() {
+        // byte 2 bits 6-7 = 2 (standing); cadence 90; right PCO +5 mm; left PCO -3 mm (0xFD)
+        val m = power(0xE2, 9, 0x80, 90, 5, 0xFD, 0xFF, 0xFF)
+        assertEquals(2.0, m[Metrics.RIDER_POSITION]!!, 0.0)
+        assertEquals(90.0, m[Metrics.CADENCE]!!, 0.0)
+        assertEquals(5.0, m[Metrics.PCO_RIGHT]!!, 0.0)
+        assertEquals(-3.0, m[Metrics.PCO_LEFT]!!, 0.0)
+    }
+
+    @Test
+    fun pageE2PcoMinus128IsInvalid() {
+        val m = power(0xE2, 9, 0x00, 0xFF, 0x80, 0x80, 0xFF, 0xFF)
+        assertEquals(0.0, m[Metrics.RIDER_POSITION]!!, 0.0)
+        assertEquals(setOf(Metrics.RIDER_POSITION), m.keys)
+    }
+
+    @Test
+    fun page14TorqueBarycenterStartsAt30DegreesInHalfDegrees() {
+        assertEquals(40.0, power(0x14, 20, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF)[Metrics.BARYCENTER]!!, 1e-9)
+    }
+
+    @Test
+    fun commonPage52BatteryVoltageAndStatus() {
+        // fractional 128/256 = 0.5 V, coarse 3 V, status 2 (good)
+        val m = power(0x52, 0, 0x01, 0, 0, 0, 128, 0x23)
+        assertEquals(3.5, m[Metrics.BATTERY_V]!!, 1e-9)
+        assertEquals(2.0, m[Metrics.BATTERY_STATUS]!!, 0.0)
+    }
+
+    @Test
+    fun fitRoundTripCarriesCyclingDynamicsFields() {
+        val t0 = 1_794_042_000_000L
+        val samples = ArrayList<Sample>()
+        fun s(m: String, v: Double) { samples += Sample(t0, 11, 7, m, v) }
+        s(Metrics.POWER, 250.0); s(Metrics.CADENCE, 90.0); s(Metrics.BALANCE_RIGHT, 48.0)
+        s(Metrics.TE_LEFT, 40.0); s(Metrics.TE_RIGHT, 45.0); s(Metrics.PS_LEFT, 80.0); s(Metrics.PS_RIGHT, 85.0)
+        s(Metrics.PCO_LEFT, -3.0); s(Metrics.PCO_RIGHT, 5.0)
+        s(Metrics.fa("left", "start_deg"), 270.0); s(Metrics.fa("left", "end_deg"), 90.0)
+        val out = File.createTempFile("dyn", ".fit")
+        out.deleteOnExit()
+        FitExporter.export(samples, out)
+        val recs = ArrayList<com.garmin.fit.RecordMesg>()
+        val bc = MesgBroadcaster(Decode())
+        bc.addListener(RecordMesgListener { recs.add(it) })
+        bc.run(FileInputStream(out))
+        val r = recs[0]
+        assertEquals(250, r.power)
+        assertEquals((0x80 or 48).toShort(), r.leftRightBalance)
+        assertEquals(40.0f, r.leftTorqueEffectiveness, 0.1f)
+        assertEquals(85.0f, r.rightPedalSmoothness, 0.1f)
+        assertEquals((-3).toByte(), r.leftPco)
+        assertEquals(5.toByte(), r.rightPco)
+        assertEquals(270.0f, r.getLeftPowerPhase(0), 1.0f)
+        assertEquals(90.0f, r.getLeftPowerPhase(1), 1.0f)
+    }
+
     @Test
     fun captureReaderParsesBroadcastWithExtendedId() {
         // ch0 broadcast, HR page, bpm 0x3C, extended flag 0x80, devnum 17691 (0x451B), devtype 120

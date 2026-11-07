@@ -20,6 +20,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import java.io.File
 
@@ -31,6 +32,8 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var button: Button
     private lateinit var dimButton: Button
+    private lateinit var dynStatusView: TextView
+    private lateinit var liveView: LiveView
     private val ui = Handler(Looper.getMainLooper())
 
     private val permissionReceiver = object : BroadcastReceiver() {
@@ -52,10 +55,12 @@ class MainActivity : Activity() {
                 summary.text = "last data: $age   stick resets: ${s.resets}\n$pages"
                 status.text = "recording to ${RecorderService.logFile?.name}"
                 button.text = "Stop"
+                dynStatusView.text = s.dynStatus
             } else {
                 button.text = "Connect and record"
             }
-            logView.text = RecorderService.lines.joinToString("\n")
+            liveView.invalidate()
+            logView.text = RecorderService.lines.toList().takeLast(40).joinToString("\n")
             ui.postDelayed(this, 1000)
         }
     }
@@ -82,14 +87,26 @@ class MainActivity : Activity() {
         }
         summary = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE }
         logView = TextView(this).apply { textSize = 10f; typeface = Typeface.MONOSPACE }
-        val scroll = ScrollView(this).apply { addView(logView) }
+        dynStatusView = TextView(this).apply { textSize = 12f }
+        val dynSwitch = Switch(this).apply {
+            text = "Ask pedals for cycling dynamics (8 Hz)"
+            isChecked = prefs.getBoolean("dyn", true)
+            setOnCheckedChangeListener { _, on ->
+                prefs.edit().putBoolean("dyn", on).apply()
+                RecorderService.session?.enableDynamics = on
+            }
+        }
+        liveView = LiveView(this) { RecorderService.session }
         root.addView(status)
         root.addView(button)
+        root.addView(dynSwitch)
+        root.addView(dynStatusView)
+        root.addView(liveView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(summary)
+        root.addView(logView)
         root.addView(exportButton)
         root.addView(dimButton)
-        root.addView(summary)
-        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        setContentView(root)
+        setContentView(ScrollView(this).apply { addView(root) })
 
         val filter = IntentFilter(ACTION_PERMISSION)
         if (Build.VERSION.SDK_INT >= 33) {

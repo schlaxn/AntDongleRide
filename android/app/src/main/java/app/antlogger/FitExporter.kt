@@ -76,12 +76,34 @@ object FitExporter {
             while (t <= endMs) {
                 val rec = RecordMesg()
                 rec.setTimestamp(fitTime(t))
-                valueAt("heart_rate", t)?.let {
+                valueAt(Metrics.HEART_RATE, t)?.let {
                     rec.setHeartRate(it.toInt().toShort())
                     hrSum += it.toLong(); hrCount++; if (it.toInt() > hrMax) hrMax = it.toInt()
                 }
-                valueAt("power", t)?.let { rec.setPower(it.toInt()) }
-                valueAt("cadence", t)?.let { rec.setCadence(it.toInt().toShort()) }
+                valueAt(Metrics.POWER, t)?.let { rec.setPower(it.toInt()) }
+                valueAt(Metrics.CADENCE, t)?.let { rec.setCadence(it.toInt().toShort()) }
+                // cycling dynamics: only the fields the FIT format (and so Garmin Connect) knows
+                valueAt(Metrics.BALANCE_RIGHT, t)?.let { rec.setLeftRightBalance((0x80 or it.toInt()).toShort()) } // bit 7 = right
+                valueAt(Metrics.TE_LEFT, t)?.let { rec.setLeftTorqueEffectiveness(it.toFloat()) }
+                valueAt(Metrics.TE_RIGHT, t)?.let { rec.setRightTorqueEffectiveness(it.toFloat()) }
+                (valueAt(Metrics.PS_LEFT, t) ?: valueAt(Metrics.PS_COMBINED, t))?.let { rec.setLeftPedalSmoothness(it.toFloat()) }
+                (valueAt(Metrics.PS_RIGHT, t) ?: valueAt(Metrics.PS_COMBINED, t))?.let { rec.setRightPedalSmoothness(it.toFloat()) }
+                valueAt(Metrics.PCO_LEFT, t)?.let { rec.setLeftPco(it.toInt().toByte()) }
+                valueAt(Metrics.PCO_RIGHT, t)?.let { rec.setRightPco(it.toInt().toByte()) }
+                for (side in listOf("left", "right")) {
+                    val s = valueAt(Metrics.fa(side, "start_deg"), t)
+                    val e = valueAt(Metrics.fa(side, "end_deg"), t)
+                    if (s != null && e != null) {
+                        if (side == "left") { rec.setLeftPowerPhase(0, s.toFloat()); rec.setLeftPowerPhase(1, e.toFloat()) }
+                        else { rec.setRightPowerPhase(0, s.toFloat()); rec.setRightPowerPhase(1, e.toFloat()) }
+                    }
+                    val ps = valueAt(Metrics.fa(side, "peak_start_deg"), t)
+                    val pe = valueAt(Metrics.fa(side, "peak_end_deg"), t)
+                    if (ps != null && pe != null) {
+                        if (side == "left") { rec.setLeftPowerPhasePeak(0, ps.toFloat()); rec.setLeftPowerPhasePeak(1, pe.toFloat()) }
+                        else { rec.setRightPowerPhasePeak(0, ps.toFloat()); rec.setRightPowerPhasePeak(1, pe.toFloat()) }
+                    }
+                }
                 enc.write(rec)
                 records++
                 t += 1000
