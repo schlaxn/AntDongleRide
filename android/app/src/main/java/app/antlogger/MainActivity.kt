@@ -56,15 +56,18 @@ class MainActivity : Activity() {
                 summary.text = "last data: $age   stick resets: ${s.resets}\n$pages"
                 status.text = (if (s.rideActive) "RECORDING ride, " else "connected, not recording, ") +
                     "raw log ${RecorderService.logFile?.name}"
-                button.text = "Stop and disconnect"
+                // disconnecting mid-ride would end the ride by accident: stop recording first
+                button.isEnabled = !s.rideActive
+                button.text = if (s.rideActive) "Disconnect (stop recording first)" else "Disconnect"
                 dynStatusView.text = s.dynStatus
-                recordButton.isEnabled = !s.rideActive && s.heartRateLive()
+                recordButton.isEnabled = s.rideActive || s.heartRateLive()
                 recordButton.text = when {
-                    s.rideActive -> "Recording..."
+                    s.rideActive -> "Stop recording"
                     s.heartRateLive() -> "Start recording"
                     else -> "Start recording (waiting for heart rate...)"
                 }
             } else {
+                button.isEnabled = true
                 button.text = "Connect"
                 recordButton.isEnabled = false
                 recordButton.text = "Start recording (connect first)"
@@ -79,6 +82,10 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // true black everywhere: window, status bar and navigation bar (screen stays on while recording)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK))
+        window.statusBarColor = android.graphics.Color.BLACK
+        window.navigationBarColor = android.graphics.Color.BLACK
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 48, 24, 24) }
         status = TextView(this).apply { textSize = 16f; text = "idle" }
@@ -86,7 +93,10 @@ class MainActivity : Activity() {
         recordButton = Button(this).apply {
             text = "Start recording (connect first)"
             isEnabled = false
-            setOnClickListener { RecorderService.session?.beginRide() }
+            setOnClickListener {
+                val s = RecorderService.session ?: return@setOnClickListener
+                if (s.rideActive) s.endRide() else s.beginRide()
+            }
         }
         val wheelPrefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val wheelEdit = android.widget.EditText(this).apply {
@@ -114,7 +124,7 @@ class MainActivity : Activity() {
         }
         applyDim(prefs.getBoolean("dim", false))
         val exportButton = Button(this).apply {
-            text = "Export latest capture to .fit"
+            text = "Export latest ride to .fit"
             setOnClickListener { exportFit() }
         }
         summary = TextView(this).apply { textSize = 13f; typeface = Typeface.MONOSPACE }

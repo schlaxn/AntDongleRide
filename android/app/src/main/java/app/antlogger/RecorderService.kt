@@ -55,10 +55,13 @@ class RecorderService : Service() {
             val usb = UsbAnt.open(usbManager, device)
             val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val file = File(getExternalFilesDir(null), "capture_$stamp.csv")
-            val samples = File(getExternalFilesDir(null), "samples_$stamp.csv")
             lines.clear()
             logFile = file
-            val s = AntSession(usb, file, samples) { line ->
+            val newSamples = {
+                val t = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                File(getExternalFilesDir(null), "samples_$t.csv")
+            }
+            val s = AntSession(usb, file, newSamples) { line ->
                 lines.addLast(line)
                 while (lines.size > 120) lines.pollFirst()
             }

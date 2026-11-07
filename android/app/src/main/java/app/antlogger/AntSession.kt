@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 class AntSession(
     private val usb: UsbAnt,
     private val rawLog: File,
-    private val samplesLog: File,
+    private val newSamplesFile: () -> File, // one sample file per ride
     private val onLine: (String) -> Unit,
 ) {
     @Volatile private var running = false
@@ -106,18 +106,31 @@ class AntSession(
     @Volatile var rideActive = false
         private set
 
-    /** Starts the ride (samples file, start marker). Refused while no heart rate is received. */
+    /** Starts a ride (own samples file, start marker). Refused while no heart rate is received. */
     fun beginRide(): Boolean {
         if (rideActive || !heartRateLive()) return false
         synchronized(logLock) {
             val now = System.currentTimeMillis()
-            samplesWriter = samplesLog.bufferedWriter().also { it.write("ts_ms,devtype,devnum,metric,value\n") }
+            samplesWriter = newSamplesFile().bufferedWriter().also { it.write("ts_ms,devtype,devnum,metric,value\n") }
             rawWriter?.write("$now,WHEEL_MM,${(tracker.wheelM * 1000).toInt()}\n")
             rawWriter?.write("$now,RIDE_START\n")
             rawWriter?.flush()
+            tracker.requestDistanceReset() // distance counts from the start of the ride
             rideActive = true
         }
         return true
+    }
+
+    /** Ends the ride; the stick stays connected and the live display keeps running. */
+    fun endRide() {
+        synchronized(logLock) {
+            if (!rideActive) return
+            rawWriter?.write("${System.currentTimeMillis()},RIDE_STOP\n")
+            rawWriter?.flush()
+            try { samplesWriter?.flush(); samplesWriter?.close() } catch (_: Exception) {}
+            samplesWriter = null
+            rideActive = false
+        }
     }
 
     /** Wheel circumference in metres, used for speed and distance. */
@@ -350,10 +363,7 @@ class AntSession(
     }
 
     fun stop() {
-        if (rideActive) synchronized(logLock) {
-            rawWriter?.write("${System.currentTimeMillis()},RIDE_STOP\n")
-            rawWriter?.flush()
-        }
+        endRide()
         running = false
         setupThread?.interrupt()
         setupThread?.join(2000)

@@ -162,6 +162,10 @@ class SensorTracker(@Volatile var wheelM: Double = 2.105) {
     private val prev = HashMap<String, Ev>()
     private val distance = HashMap<String, Double>()
     private val lastBeat = HashMap<Int, IntArray>() // devNum -> (count, time)
+    @Volatile private var resetDistance = false
+
+    /** Distance restarts at 0 with the next speed event (thread-safe request from the UI side). */
+    fun requestDistanceReset() { resetDistance = true }
 
     /** Revolutions per second since the previous event, 0 when nothing moved for 3 s, null if unknown. */
     private fun rate(key: String, ts: Long, t: Int, revs: Int): Pair<Double, Int>? {
@@ -179,6 +183,10 @@ class SensorTracker(@Volatile var wheelM: Double = 2.105) {
     }
 
     fun decode(tsMs: Long, devType: Int, devNum: Int, p: ByteArray): List<Sample> {
+        if (resetDistance) {
+            distance.clear()
+            resetDistance = false
+        }
         val out = ArrayList(Decoder.decode(tsMs, devType, devNum, p))
         fun u8(i: Int) = p[i].toInt() and 0xFF
         fun u16(i: Int) = u8(i) or (u8(i + 1) shl 8)
@@ -237,9 +245,9 @@ object CaptureReader {
             if (parts.size < 2) continue
             val ts = parts[0].toLongOrNull() ?: continue
             when (parts[1].trim()) {
-                "RIDE_START" -> if (start == Long.MIN_VALUE) start = ts
+                "RIDE_START" -> { start = ts; stop = Long.MAX_VALUE } // the latest ride wins
                 "RIDE_STOP" -> stop = ts
-                "WHEEL_MM" -> parts.getOrNull(2)?.trim()?.toDoubleOrNull()?.let { if (start == Long.MIN_VALUE) wheelM = it / 1000.0 }
+                "WHEEL_MM" -> parts.getOrNull(2)?.trim()?.toDoubleOrNull()?.let { wheelM = it / 1000.0 }
             }
         }
         val tracker = SensorTracker(wheelM)
@@ -247,6 +255,7 @@ object CaptureReader {
         val last = HashMap<String, ByteArray>()
         for (line in all) {
             val parts = line.split(',')
+            if (parts.size == 2 && parts[1].trim() == "RIDE_START") tracker.requestDistanceReset()
             if (parts.size != 2) continue // 3 parts = frame we sent (T) or a marker with a value
             val ts = parts[0].toLongOrNull() ?: continue
             val hex = parts[1].trim()

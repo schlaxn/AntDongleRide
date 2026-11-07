@@ -15,10 +15,14 @@ import kotlin.math.abs
  */
 class LiveView(context: Context, private val session: () -> AntSession?) : View(context) {
     private val d = resources.displayMetrics.density
-    private val fg = Color.rgb(30, 30, 30)
-    private val dim = Color.rgb(140, 140, 140)
-    private val left = Color.rgb(0, 120, 200)
-    private val right = Color.rgb(230, 110, 0)
+    // true black background (OLED), light text; left/right colours brightened to read on black
+    private val fg = Color.rgb(235, 235, 235)
+    private val dim = Color.rgb(150, 150, 150)
+    private val left = Color.rgb(70, 165, 255)
+    private val right = Color.rgb(255, 150, 40)
+    private val track = Color.rgb(45, 45, 45)
+    private val outline = Color.rgb(85, 85, 85)
+    private val warn = Color.rgb(255, 90, 90)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fg }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -47,7 +51,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         label(c, name, x, y, 12f, dim)
         val top = y + 6 * d
         val r = RectF(x, top, x + w, top + 14 * d)
-        fill.color = Color.rgb(230, 230, 230)
+        fill.color = track
         c.drawRoundRect(r, 4 * d, 4 * d, fill)
         if (value != null) {
             fill.color = color
@@ -59,7 +63,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
     /** Crank diagram: 0 deg at the top, clockwise. Draws the positive-torque window and the peak window. */
     private fun crank(c: Canvas, title: String, side: String, color: Int, cx: Float, cy: Float, r: Float) {
         stroke.strokeWidth = 1.5f * d
-        stroke.color = Color.rgb(200, 200, 200)
+        stroke.color = outline
         c.drawCircle(cx, cy, r, stroke)
         label(c, "0", cx, cy - r - 4 * d, 10f, dim, Paint.Align.CENTER)
         label(c, "180", cx, cy + r + 14 * d, 10f, dim, Paint.Align.CENTER)
@@ -98,7 +102,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         label(c, fmt(value, 0, " mm"), x + w, y, 12f, fg, Paint.Align.RIGHT)
         val mid = x + w / 2
         val ly = y + 14 * d
-        stroke.color = Color.rgb(200, 200, 200)
+        stroke.color = outline
         stroke.strokeWidth = 2 * d
         c.drawLine(x, ly, x + w, ly, stroke)
         c.drawLine(mid, ly - 6 * d, mid, ly + 6 * d, stroke)
@@ -126,7 +130,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         label(c, "Balance L / R", pad, y, 12f, dim)
         val by = y + 8 * d
         val bw = w - 2 * pad
-        fill.color = Color.rgb(230, 230, 230)
+        fill.color = track
         c.drawRoundRect(RectF(pad, by, pad + bw, by + 26 * d), 6 * d, 6 * d, fill)
         if (r != null) {
             val lw = bw * ((100 - r) / 100).toFloat()
@@ -187,7 +191,7 @@ class LiveView(context: Context, private val session: () -> AntSession?) : View(
         label(c, "Other sensors", pad, y, 12f, dim)
         y += 34 * d
         val hr = v(Metrics.HEART_RATE)
-        label(c, fmt(hr), pad, y + 10 * d, 44f, if (hr == null) Color.rgb(200, 40, 40) else fg)
+        label(c, fmt(hr), pad, y + 10 * d, 44f, if (hr == null) warn else fg)
         label(c, "bpm", pad + 100 * d, y + 10 * d, 14f, dim)
         label(c, "RR ${fmt(v(Metrics.RR_MS), 0, " ms")}", pad, y + 32 * d, 12f, dim)
         label(c, fmt(v(Metrics.SPEED_KMH), 1), w / 2, y + 10 * d, 44f)

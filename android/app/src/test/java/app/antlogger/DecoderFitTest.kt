@@ -169,6 +169,29 @@ class DecoderFitTest {
     }
 
     @Test
+    fun captureWithTwoRidesExportsTheLatestOne() {
+        fun hrLine(ts: Long, bpm: Int): String {
+            val f = Ant.encode(Ant.BROADCAST, bytes(0, 0x80, 0xFF, 0xFF, 0xFF, 0, 0, 1, bpm, 0x80, 0x1B, 0x45, 120, 0x31))
+            return "$ts,${f.hex().replace(" ", "")}"
+        }
+        val lines = sequenceOf("1000,RIDE_START", hrLine(1500, 60), "2000,RIDE_STOP",
+            hrLine(2500, 65), "3000,RIDE_START", hrLine(3500, 70), "4000,RIDE_STOP")
+        val hr = CaptureReader.read(lines).filter { it.metric == Metrics.HEART_RATE }.map { it.value }
+        assertEquals(listOf(70.0), hr)
+    }
+
+    @Test
+    fun distanceRestartsAtZeroAfterResetRequest() {
+        val t = SensorTracker(2.0)
+        csc(t, 0, 123, 0, 0, 0, 0, 0, 0, 0, 0)
+        val first = csc(t, 100, 123, 0, 0, 0, 0, 0x00, 0x04, 5, 0) // 5 revs = 10 m
+        assertEquals(10.0, first[Metrics.DISTANCE_M]!!, 1e-9)
+        t.requestDistanceReset()
+        val second = csc(t, 200, 123, 0, 0, 0, 0, 0x00, 0x08, 8, 0) // 3 more revs = 6 m since the reset
+        assertEquals(6.0, second[Metrics.DISTANCE_M]!!, 1e-9)
+    }
+
+    @Test
     fun fitRoundTripCarriesCyclingDynamicsFields() {
         val t0 = 1_794_042_000_000L
         val samples = ArrayList<Sample>()

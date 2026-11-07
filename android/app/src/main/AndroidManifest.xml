@@ -11,7 +11,7 @@
     <application
         android:label="ANT Logger"
         android:allowBackup="false"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@android:style/Theme.Material.NoActionBar">
 
         <service
             android:name=".RecorderService"
