@@ -50,6 +50,11 @@ class EncodersTest {
         assertArrayEquals(b(0x05, 0x00), d.copyOfRange(3, 5))
     }
 
+    @Test fun cyclingPowerMeasurementBytes() {
+        // flags 0x0020, power 250 = 0x00FA, crank revs 10, crank event time 1024 = 0x0400
+        assertArrayEquals(b(0x20, 0x00, 0xFA, 0x00, 0x0A, 0x00, 0x00, 0x04), Ble.cpsMeasurement(250, 10, 1024))
+    }
+
     @Test fun controlPointAcceptsControlResetStartStop() {
         assertArrayEquals(b(0x80, 0x00, 0x01), Ble.controlPointReply(0x00))
         assertArrayEquals(b(0x80, 0x01, 0x01), Ble.controlPointReply(0x01))

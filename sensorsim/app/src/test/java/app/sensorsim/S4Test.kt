@@ -52,11 +52,20 @@ class S4Test {
         assertEquals(10.0, d.snapshot(2.0).distanceM, 1e-9)
     }
 
-    @Test fun speedIsTheTicksOfTheLastSecond() {
+    @Test fun speedIsAveragedOverAtLeastFifteenSeconds() {
         val d = S4Decoder()
         for (i in 0 until 10) d.onLine("P0A", 0.1 * i)     // 100 ticks in 0.9 s
-        assertEquals(100 / 91.8, d.snapshot(0.95).speedMps, 1e-9)
-        assertEquals(0.0, d.snapshot(5.0).speedMps, 1e-12)  // no pulses for a while: standing still
+        // only 1 s has passed since the first pulse, so the average covers 1 s (the minimum divisor)
+        assertEquals(100 / 1.0 / 91.8, d.snapshot(1.0).speedMps, 1e-9)
+        // at 20 s the pulses are older than the 15 s window: standing still
+        assertEquals(0.0, d.snapshot(20.0).speedMps, 1e-12)
+    }
+
+    @Test fun speedSpreadsAcrossTheWindow() {
+        val d = S4Decoder()
+        // 10 lines a second of 10 ticks: at t = 15 s the pulse at t = 0 has left the window; 149 pulses = 1490 ticks over 15 s
+        for (i in 0 until 150) d.onLine("P0A", 0.1 * i)
+        assertEquals(1490.0 / 15 / 91.8, d.snapshot(15.0).speedMps, 1e-9)
     }
 
     @Test fun strokeRateFromStrokeIntervals() {

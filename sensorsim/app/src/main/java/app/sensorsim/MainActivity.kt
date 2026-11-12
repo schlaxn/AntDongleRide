@@ -17,9 +17,13 @@ import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.Spinner
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -38,6 +42,21 @@ class MainActivity : Activity() {
     private lateinit var rowerBox: CheckBox
     private val restartBoxes = ArrayList<CheckBox>()   // choices that only take effect after a restart
     private var refreshSpeedLabel: () -> Unit = {}     // redraws the speed label (its watts depend on the fill setting)
+    private lateinit var paceBox: LinearLayout         // manual mode: the pace slider
+    private lateinit var factorBox: LinearLayout       // USB mode: the speed factor slider
+    private lateinit var cadenceBox: LinearLayout      // bike: the cadence factor slider
+    private lateinit var rowerFieldsBox: LinearLayout  // rower: the optional Rower Data fields
+    private lateinit var profileSpinner: Spinner       // the profile: rower or bike
+    private lateinit var strokeBox: LinearLayout       // manual stroke rate: hidden when the USB rower measures it
+
+    /** Shows the controls that belong to the chosen profile and source. */
+    private fun updateModeViews() {
+        paceBox.visibility = if (Hub.useRower) View.GONE else View.VISIBLE
+        factorBox.visibility = View.VISIBLE   // the speed factor applies to every source and profile
+        cadenceBox.visibility = if (Hub.bike) View.VISIBLE else View.GONE
+        strokeBox.visibility = if (Hub.useRower) View.GONE else View.VISIBLE
+        rowerFieldsBox.visibility = if (Hub.bike) View.GONE else View.VISIBLE
+    }
     private var pendingStart: (() -> Unit)? = null
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -82,7 +101,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("settings", MODE_PRIVATE)
-        Hub.useRower = prefs.getBoolean("useRower", Hub.useRower)
+        Hub.useRower = !prefs.getBoolean("simulate", false)   // default off: the real rower is used
+        Hub.bike = prefs.getBoolean("bike", false)
         Hub.fillLitres = prefs.getFloat("fill", Hub.fillLitres.toFloat()).toDouble()
         // a saved choice may still hold average stroke rate or pace from the testing build: those break MyWhoosh
         Hub.fields = prefs.getInt("fields", 0) and (RowerFields.AVG_POWER or RowerFields.ENERGY or RowerFields.EXTRA_FEATURE)
@@ -100,16 +120,42 @@ class MainActivity : Activity() {
         col.addView(text("Poses as a Bluetooth rower for MyWhoosh. Source: the WaterRower S4 on the USB OTG port.", 13f)
             .apply { setTextColor(Color.LTGRAY) })
 
-        rowerBox = CheckBox(this).apply {
-            text = "Use the USB rower (WaterRower S4)"
-            isChecked = Hub.useRower
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, v -> Hub.useRower = v; prefs.edit().putBoolean("useRower", v).apply() }
+        // the profile: the rower (default) or the bike (power and cadence). Locked while running.
+        profileSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_item,
+                listOf("Rower (FTMS, for MyWhoosh rowing)", "Bike (power and cadence, Cycling Power)")).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            setSelection(if (Hub.bike) 1 else 0, false)
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, view: View?, pos: Int, id: Long) {
+                    val bike = pos == 1
+                    if (bike == Hub.bike) return
+                    Hub.bike = bike
+                    prefs.edit().putBoolean("bike", bike).apply()
+                    updateModeViews()
+                }
+                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            }
         }
-        col.addView(rowerBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        col.addView(profileSpinner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { topMargin = dp(16) })
 
-        col.addView(text("Rower data fields. The base fields always go out. To find what MyWhoosh accepts, tick ONE extra at a time:", 14f)
+        // simulate the USB rower: off (default) uses the real WaterRower; on uses the sliders below instead
+        rowerBox = CheckBox(this).apply {
+            text = "Simulate the USB rower (use the sliders instead of the WaterRower S4)"
+            isChecked = !Hub.useRower
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, v ->
+                Hub.useRower = !v
+                prefs.edit().putBoolean("simulate", v).apply()
+                updateModeViews()
+            }
+        }
+
+        rowerFieldsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(rowerFieldsBox)
+        rowerFieldsBox.addView(text("Rower data fields. The base fields always go out. To find what MyWhoosh accepts, tick ONE extra at a time:", 14f)
             .apply { setTextColor(Color.LTGRAY); setPadding(0, dp(16), 0, 0) })
         fun fieldBox(title: String, bit: Int, needsRestart: Boolean = false) {
             val cb = CheckBox(this).apply {
@@ -122,7 +168,7 @@ class MainActivity : Activity() {
                 }
             }
             if (needsRestart) restartBoxes.add(cb)
-            col.addView(cb)
+            rowerFieldsBox.addView(cb)
         }
         // average stroke rate and average pace are not offered: MyWhoosh misreads the packet when they are present
         fieldBox("Average power", RowerFields.AVG_POWER)
@@ -136,15 +182,40 @@ class MainActivity : Activity() {
             refreshSpeedLabel()   // the watts shown for the speed depend on the fill setting
         }
 
-        col.addView(text("Manual values (used when the USB rower is off)", 14f)
+        paceBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        factorBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        cadenceBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(cadenceBox)
+        col.addView(factorBox)
+        // the simulate checkbox only changes the speed and stroke sliders below it, so it sits between the two groups
+        col.addView(rowerBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { topMargin = dp(16) })
+        col.addView(text("Speed and stroke (the simulated values; with the real rower, the speed factor scales the measured speed)", 14f)
             .apply { setTextColor(Color.LTGRAY); setPadding(0, dp(24), 0, 0) })
-        refreshSpeedLabel = slider(col, "Speed (power is calculated from it, as on the real rower)", 100, (Hub.speedMps * 10).toInt(), {
-            val v = it / 10.0
-            val pace = Ble.paceS500(v)
-            val watts = (S4.WATT_CONST * Math.pow(v, 3.0) * S4.fillFactor(Hub.fillLitres)).toInt()
-            "%.1f m/s  =  %s /500 m  =  %d W".format(v, if (pace == 0) "--" else "%d:%02d".format(pace / 60, pace % 60), watts)
-        }) { Hub.speedMps = it / 10.0 }
-        slider(col, "Stroke rate", 120, (Hub.strokeRate * 2).toInt(), { "%.1f spm".format(it / 2.0) }) { Hub.strokeRate = it / 2.0 }
+        col.addView(paceBox)
+        slider(cadenceBox, "Cadence factor for the bike (2 to 4): cadence = stroke rate x this", 200,
+            ((Hub.cadenceFactor - 2.0) * 100).toInt().coerceIn(0, 200), {
+                val f = 2.0 + it / 100.0
+                "x%.2f  (a stroke rate of 30 spm gives %.0f rpm)".format(f, 30 * f)
+            }) { Hub.cadenceFactor = 2.0 + it / 100.0 }
+        // logarithmic: 1/8 at the left, 1 in the middle, 8 at the right; each step is the same ratio
+        slider(factorBox, "Speed factor (1/8 to 8): multiplies the measured speed (USB rower) or the manual pace; the watts follow it",
+            600, (Math.round((Math.log(Hub.paceFactor) / Math.log(2.0) + 3.0) * 100)).toInt().coerceIn(0, 600), {
+                "x%.3f  (the watts change with its cube)".format(Math.pow(2.0, it / 100.0 - 3.0))
+            }) { Hub.paceFactor = Math.pow(2.0, it / 100.0 - 3.0) }
+        // pace from 3:00 (slow, left) to 1:30 (fast, right) in one-second steps; speed and power follow from it
+        refreshSpeedLabel = slider(paceBox, "Pace per 500 m (speed and power follow from it, as on the real rower)", 90,
+            180 - Hub.paceS, {
+                val pace = 180 - it
+                val v = 500.0 / pace
+                val watts = (S4.WATT_CONST * Math.pow(v, 3.0) * S4.fillFactor(Hub.fillLitres)).toInt()
+                "%d:%02d /500 m  =  %.2f m/s  =  %d W".format(pace / 60, pace % 60, v, watts)
+            }) { Hub.paceS = 180 - it }
+        strokeBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(strokeBox)
+        slider(strokeBox, "Stroke rate (only when simulating; the real rower measures it)", 120,
+            (Hub.strokeRate * 2).toInt(), { "%.1f spm".format(it / 2.0) }) { Hub.strokeRate = it / 2.0 }
+        updateModeViews()   // every box exists now: apply the visibility for the saved profile and source
 
         startBtn = Button(this).apply { setOnClickListener { toggle() } }
         pauseBtn = Button(this).apply { setOnClickListener { Hub.paused = !Hub.paused; refresh() } }
@@ -177,11 +248,12 @@ class MainActivity : Activity() {
     }
 
     private fun refresh() {
-        startBtn.text = if (Hub.running) "Stop" else "Start posing as a rower"
+        startBtn.text = if (Hub.running) "Stop" else "Start rowing"
         pauseBtn.text = if (Hub.paused) "Resume (sending zeros now)" else "Pause (send zeros)"
         pauseBtn.isEnabled = !Hub.useRower
         rowerBox.isEnabled = !Hub.running
         restartBoxes.forEach { it.isEnabled = !Hub.running }
+        profileSpinner.isEnabled = !Hub.running
         status.text = Hub.status
         sent.text = if (Hub.running) "Sending: ${Hub.sent}" else ""
     }

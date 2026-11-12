@@ -17,7 +17,7 @@ object S4 {
     }
 
     const val TICKS_PER_M = 91.8       // ring-segment ticks per metre (four rest-to-rest runs)
-    const val WINDOW_S = 1.0           // speed = ticks counted in the last second
+    const val SPEED_WINDOW_S = 15.0    // speed = ticks counted over the last 15 s (less while the session is younger)
     const val WATT_CONST = 1.78        // W per (m/s)^3 at 17 L
     const val FILL_SLOPE_PER_L = 0.054 // displayed-power factor per litre of fill setting, relative to 17 L
     const val STROKE_TIMEOUT_S = 5.0   // no stroke for this long: stroke rate and power read zero
@@ -62,12 +62,14 @@ class LineSplitter {
 }
 
 /**
- * Stateful decoder. Speed is the ticks counted in the last second over TICKS_PER_M, distance the ticks since the first
- * stroke over TICKS_PER_M, stroke rate from SS to SS, and power once per completed stroke from the averaged speed
- * signal with the cube law and the fill setting. Timestamps are seconds on any monotonic clock.
+ * Stateful decoder. Speed is the ticks counted over the last SPEED_WINDOW_S seconds (fewer while the session is younger)
+ * over TICKS_PER_M, so it is an average of at least 15 s and does not jump with each burst of lines. Distance is the ticks
+ * since the first stroke over TICKS_PER_M, stroke rate from SS to SS, and power once per completed stroke from the averaged
+ * speed signal with the cube law and the fill setting. Timestamps are seconds on any monotonic clock.
  */
 class S4Decoder(@Volatile var fillLitres: Double = 17.0) {
     private val recent = ArrayDeque<Pair<Double, Int>>()   // (ts, ticks) inside the speed window
+    private var firstPulse: Double? = null
     private var cycleTicks = 0
     private var speedSum = 0.0
     private var speedN = 0
@@ -78,20 +80,31 @@ class S4Decoder(@Volatile var fillLitres: Double = 17.0) {
     private var strokes = 0L
     private var strokeRate = 0.0
     private var powerW = 0.0
+    private var speedFilter = AdaptiveSmoother()   // the displayed speed: 15 s steady average, fast path for real changes
+    private var lastSnapshot: Double? = null
 
     @Synchronized
     fun reset() {
-        recent.clear(); cycleTicks = 0; speedSum = 0.0; speedN = 0
+        speedFilter = AdaptiveSmoother(); lastSnapshot = null
+        recent.clear(); firstPulse = null; cycleTicks = 0; speedSum = 0.0; speedN = 0
         lastSs = null; firstSs = null; lastSeen = 0.0; distanceTicks = 0; strokes = 0; strokeRate = 0.0; powerW = 0.0
+    }
+
+    /** Speed in m/s at time [now], averaged over the window; the divisor is the time covered so far (at least 1 s). */
+    private fun speedAt(now: Double): Double {
+        val first = firstPulse ?: return 0.0
+        while (recent.isNotEmpty() && now - recent.first().first >= S4.SPEED_WINDOW_S) recent.removeFirst()
+        val span = minOf(S4.SPEED_WINDOW_S, maxOf(1.0, now - first))
+        return recent.sumOf { it.second } / span / S4.TICKS_PER_M
     }
 
     @Synchronized
     fun onLine(line: String, ts: Double) {
         when (val p = parseS4Line(line)) {
             is S4Line.Pulse -> {
+                if (firstPulse == null) firstPulse = ts
                 recent.addLast(ts to p.ticks)
-                while (recent.isNotEmpty() && ts - recent.first().first >= S4.WINDOW_S) recent.removeFirst()
-                val v = recent.sumOf { it.second } / S4.WINDOW_S / S4.TICKS_PER_M
+                val v = speedAt(ts)
                 speedSum += v; speedN++
                 cycleTicks += p.ticks
                 if (firstSs != null) distanceTicks += p.ticks
@@ -123,8 +136,9 @@ class S4Decoder(@Volatile var fillLitres: Double = 17.0) {
     /** The state at time [now]: speed decays to zero when no pulses arrive, stroke rate and power after a timeout. */
     @Synchronized
     fun snapshot(now: Double): RowSnapshot {
-        while (recent.isNotEmpty() && now - recent.first().first >= S4.WINDOW_S) recent.removeFirst()
-        val speed = recent.sumOf { it.second } / S4.WINDOW_S / S4.TICKS_PER_M
+        val dt = lastSnapshot?.let { now - it } ?: 0.0
+        lastSnapshot = now
+        val speed = speedFilter.update(speedAt(now), dt)
         val stale = lastSs.let { it == null || now - it > S4.STROKE_TIMEOUT_S }
         val first = firstSs
         val elapsed = if (first == null) 0 else max(0.0, lastSeen - first).toInt()

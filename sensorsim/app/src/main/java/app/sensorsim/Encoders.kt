@@ -9,6 +9,11 @@ import kotlin.math.roundToInt
 object Uuids {
     private fun u(short: Int) = UUID.fromString(String.format("%08x-0000-1000-8000-00805f9b34fb", short))
 
+    val CYCLING_POWER = u(0x1818)
+    val CPS_MEASUREMENT = u(0x2A63)
+    val CPS_FEATURE = u(0x2A65)
+    val SENSOR_LOCATION = u(0x2A5D)
+
     val FTMS = u(0x1826)
     val FTMS_FEATURE = u(0x2ACC)
     val ROWER_DATA = u(0x2AD1)
@@ -135,6 +140,25 @@ object Ble {
     private fun ByteArray.u16(i: Int, v: Int) { this[i] = v.toByte(); this[i + 1] = (v shr 8).toByte() }
     private fun ByteArray.u24(i: Int, v: Long) { for (k in 0..2) this[i + k] = (v shr (8 * k)).toByte() }
     private fun ByteArray.u32(i: Int, v: Long) { for (k in 0..3) this[i + k] = (v shr (8 * k)).toByte() }
+
+    /**
+     * Cycling Power Measurement 0x2A63 for the bike profile: flags 0x0020 (crank revolution data present), power s16 (W),
+     * crank revolutions u16 (the cadence counts these), time of the last crank revolution u16 (1/1024 s).
+     */
+    fun cpsMeasurement(powerW: Int, crankRevs: Long, crankTicks: Int): ByteArray {
+        val b = ByteArray(8)
+        b.u16(0, 0x0020)
+        b.u16(2, powerW.coerceIn(-32768, 32767))
+        b.u16(4, (crankRevs and 0xFFFF).toInt())
+        b.u16(6, crankTicks and 0xFFFF)
+        return b
+    }
+
+    /** Cycling Power Feature 0x2A65: crank revolution data supported (bit 3). */
+    fun cpsFeature(): ByteArray = ByteArray(4).also { it.u32(0, 0x08) }
+
+    /** Sensor Location 0x2A5D: 13 = rear hub. */
+    fun sensorLocation(): ByteArray = byteArrayOf(13)
 
     /**
      * Fitness Machine Feature 0x2ACC. Base 0x5024 as in the version that worked: total distance (bit 2), pace (5),
