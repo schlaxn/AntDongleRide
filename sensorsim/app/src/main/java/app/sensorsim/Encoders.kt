@@ -1,18 +1,13 @@
 package app.sensorsim
 
 import java.util.UUID
-import kotlin.math.cbrt
 import kotlin.math.floor
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /** Bluetooth SIG UUIDs used by the rower simulator. */
 object Uuids {
     private fun u(short: Int) = UUID.fromString(String.format("%08x-0000-1000-8000-00805f9b34fb", short))
-
-    val CYCLING_POWER = u(0x1818)
-    val CPS_MEASUREMENT = u(0x2A63)
-    val CPS_FEATURE = u(0x2A65)
-    val SENSOR_LOCATION = u(0x2A5D)
 
     val FTMS = u(0x1826)
     val FTMS_FEATURE = u(0x2ACC)
@@ -47,6 +42,15 @@ data class RowSnapshot(
     val crankTicks: Int = 0,   // time of the last stroke in 1/1024 s, for the Cycling Power crank data
 )
 
+/** Optional Rower Data fields, as a bit mask. The base fields always go out; these are switched on one at a time to test. */
+object RowerFields {
+    const val AVG_RATE = 1    // average stroke rate: MyWhoosh misreads the packet (power shows 2500 W). Not offered in the UI.
+    const val AVG_PACE = 2    // average pace: MyWhoosh reads it as the power (120 instead of 150 W). Not offered in the UI.
+    const val AVG_POWER = 4   // average power
+    const val ENERGY = 8      // expended energy (total, per hour, per minute); an estimate, see SessionStats
+    const val EXTRA_FEATURE = 16  // also announce cadence and energy in the Fitness Machine Feature (needs a restart)
+}
+
 /** Counts whole strokes at a variable rate, with the time of the last one in 1/1024 s (the BLE crank event time). */
 class RevCounter {
     private var revs = 0.0
@@ -70,26 +74,29 @@ class RevCounter {
     }
 }
 
-/** What the sliders ask for. Speed is not an input: like on the real rower it follows from the power. */
-data class Targets(val powerW: Int, val strokeRateSpm: Double)
+/** What the sliders ask for, as on the real rower: speed and stroke rate. Power is calculated from the speed. */
+data class Targets(val speedMps: Double, val strokeRateSpm: Double)
 
-/** Manual mode: integrates the slider values into strokes, distance and time, with speed from power (cube law). */
+/**
+ * Manual mode: integrates the slider values into strokes, distance and time. Power is calculated from the speed with
+ * the cube law and the fill setting, exactly as the monitor displays it (W = 1.78 x v^3 x fill factor).
+ */
 class ManualRower {
     private val strokes = RevCounter()
     private var distanceM = 0.0
     private var clockMs = 0.0
-    private var last = Targets(0, 0.0)
-    private var speed = 0.0
+    private var last = Targets(0.0, 0.0)
+    private var powerW = 0
 
     fun advance(t: Targets, dtMs: Double, fillLitres: Double) {
         clockMs += dtMs
         last = t
-        speed = if (t.powerW > 0) cbrt(t.powerW / (S4.WATT_CONST * S4.fillFactor(fillLitres))) else 0.0
+        powerW = (S4.WATT_CONST * t.speedMps.pow(3) * S4.fillFactor(fillLitres)).roundToInt()
         strokes.advance(t.strokeRateSpm / 60.0, clockMs, dtMs)
-        distanceM += speed * dtMs / 1000.0
+        distanceM += t.speedMps * dtMs / 1000.0
     }
 
-    fun snapshot() = RowSnapshot(last.strokeRateSpm, strokes.count, distanceM, speed, last.powerW, (clockMs / 1000.0).toInt(),
+    fun snapshot() = RowSnapshot(last.strokeRateSpm, strokes.count, distanceM, last.speedMps, powerW, (clockMs / 1000.0).toInt(),
         crankTicks = strokes.eventTicks)
 }
 
@@ -129,29 +136,16 @@ object Ble {
     private fun ByteArray.u24(i: Int, v: Long) { for (k in 0..2) this[i + k] = (v shr (8 * k)).toByte() }
     private fun ByteArray.u32(i: Int, v: Long) { for (k in 0..3) this[i + k] = (v shr (8 * k)).toByte() }
 
-    /** Cycling Power Measurement 0x2A63: flags (crank revolution data present), power, crank revs (= strokes), crank event time. */
-    fun cpsMeasurement(powerW: Int, crankRevs: Long, crankTicks: Int): ByteArray {
-        val b = ByteArray(8)
-        b.u16(0, 0x0020)
-        b.u16(2, powerW.coerceIn(-32768, 32767))
-        b.u16(4, (crankRevs and 0xFFFF).toInt())
-        b.u16(6, crankTicks and 0xFFFF)
-        return b
+    /**
+     * Fitness Machine Feature 0x2ACC. Base 0x5024 as in the version that worked: total distance (bit 2), pace (5),
+     * elapsed time (12), power measurement (14). EXTRA_FEATURE adds average stroke rate / cadence (bit 1) and expended
+     * energy (bit 9); it is read once when the client connects, so it needs a restart.
+     */
+    fun ftmsFeature(fields: Int = 0): ByteArray {
+        var f = 0x5024L
+        if (fields and RowerFields.EXTRA_FEATURE != 0) f = f or 0x0002 or 0x0200
+        return ByteArray(8).also { it.u32(0, f) }
     }
-
-    /** Cycling Power Feature 0x2A65: crank revolution data supported (bit 3). */
-    fun cpsFeature(): ByteArray = ByteArray(4).also { it.u32(0, 0x08) }
-
-    /** Sensor Location 0x2A5D. 13 = rear hub. */
-    fun sensorLocation(): ByteArray = byteArrayOf(13)
-
-    /** Rower Data pace value for "not available" (the rower is not moving): 0xFFFF. Zero would read as infinitely fast. */
-    const val PACE_INVALID = 0xFFFF
-
-    private fun paceField(paceS: Int): Int = if (paceS <= 0) PACE_INVALID else paceS
-
-    /** Fitness Machine Feature 0x2ACC: distance (bit 2), pace (5), elapsed time (12). As in the working version. */
-    fun ftmsFeature(): ByteArray = ByteArray(8).also { it.u32(0, 0x5024) }
 
     /** UTF-8 text value, as used by the Device Information characteristics. */
     fun text(s: String): ByteArray = s.toByteArray(Charsets.UTF_8)
@@ -160,21 +154,43 @@ object Ble {
     fun paceS500(speedMps: Double): Int = if (speedMps < 0.1) 0 else (500.0 / speedMps).roundToInt().coerceAtMost(0xFFFE)
 
     /**
-     * Rower Data 0x2AD1, the layout that worked in MyWhoosh: flags 0x082C = bits 2 (total distance), 3 (instantaneous
-     * pace), 5 (instantaneous power), 11 (elapsed time); bit 0 is 0, so stroke rate and stroke count come first.
-     * Fields: stroke rate u8 (0.5 spm), stroke count u16, distance u24 (m), pace u16 (s/500 m, 0 when still),
-     * power s16 (W), elapsed time u16 (s): 14 bytes. The averages and energy fields are not sent (they were added
-     * in a later version and MyWhoosh showed 2500 W with it).
+     * Rower Data 0x2AD1. Base = the layout that worked in MyWhoosh: flags 0x082C = bits 2 (total distance),
+     * 3 (instantaneous pace), 5 (instantaneous power), 11 (elapsed time); bit 0 is 0, so stroke rate and stroke count
+     * come first. Fields in spec order: stroke rate u8 (0.5 spm), stroke count u16, [average stroke rate u8 (0.5), bit 1],
+     * distance u24 (m), pace u16 (s/500 m, 0 when still), [average pace u16, bit 4], power s16 (W),
+     * [average power s16, bit 6], [energy total u16 kcal, per hour u16, per minute u8, bit 8], elapsed time u16 (s).
+     * [..] = optional, chosen with [fields] (RowerFields). Not available from the S4: resistance, heart rate,
+     * metabolic equivalent, remaining time.
      */
-    fun rowerData(s: RowSnapshot): ByteArray {
-        val b = ByteArray(14)
-        b.u16(0, 0x082C)
-        b.u8(2, (s.strokeRateSpm * 2).roundToInt().coerceIn(0, 255))
-        b.u16(3, (s.strokeCount and 0xFFFF).toInt())
-        b.u24(5, s.distanceM.toLong().coerceIn(0, 0xFFFFFF))
-        b.u16(8, paceS500(s.speedMps))
-        b.u16(10, s.powerW.coerceIn(-32768, 32767))
-        b.u16(12, s.elapsedS.coerceIn(0, 0xFFFF))
+    fun rowerData(s: RowSnapshot, fields: Int = 0): ByteArray {
+        val avgRate = fields and RowerFields.AVG_RATE != 0
+        val avgPace = fields and RowerFields.AVG_PACE != 0
+        val avgPower = fields and RowerFields.AVG_POWER != 0
+        val energy = fields and RowerFields.ENERGY != 0
+        var flags = 0x0004 or 0x0008 or 0x0020 or 0x0800
+        if (avgRate) flags = flags or 0x0002
+        if (avgPace) flags = flags or 0x0010
+        if (avgPower) flags = flags or 0x0040
+        if (energy) flags = flags or 0x0100
+        val b = ByteArray(14 + (if (avgRate) 1 else 0) + (if (avgPace) 2 else 0) + (if (avgPower) 2 else 0) + (if (energy) 5 else 0))
+        var i = 0
+        fun put8(v: Int) { b.u8(i, v); i += 1 }
+        fun put16(v: Int) { b.u16(i, v); i += 2 }
+        put16(flags)
+        put8((s.strokeRateSpm * 2).roundToInt().coerceIn(0, 255))
+        put16((s.strokeCount and 0xFFFF).toInt())
+        if (avgRate) put8((s.avgStrokeRateSpm * 2).roundToInt().coerceIn(0, 255))
+        b.u24(i, s.distanceM.toLong().coerceIn(0, 0xFFFFFF)); i += 3
+        put16(paceS500(s.speedMps))
+        if (avgPace) put16(s.avgPaceS.coerceIn(0, 0xFFFE))
+        put16(s.powerW.coerceIn(-32768, 32767))
+        if (avgPower) put16(s.avgPowerW.coerceIn(-32768, 32767))
+        if (energy) {
+            put16(s.energyKcal.coerceIn(0, 0xFFFF))
+            put16(s.kcalPerHour.coerceIn(0, 0xFFFF))
+            put8(s.kcalPerMinute.coerceIn(0, 255))
+        }
+        put16(s.elapsedS.coerceIn(0, 0xFFFF))
         return b
     }
 

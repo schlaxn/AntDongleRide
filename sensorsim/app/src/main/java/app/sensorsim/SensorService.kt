@@ -15,11 +15,11 @@ import java.util.UUID
 
 /** What the user chose and what the service reports; shared between the screen and the service. */
 object Hub {
-    @Volatile var powerW = 100            // manual values, used when the USB rower is off; speed follows from the power
+    @Volatile var speedMps = 3.8          // manual values, used when the USB rower is off; power follows from the speed
     @Volatile var strokeRate = 20.0
     @Volatile var paused = false
     @Volatile var useRower = false        // true: values come from the WaterRower S4 over USB
-    @Volatile var cps = true              // also send the power as a Cycling Power sensor (the path that worked for power)
+    @Volatile var fields = 0              // optional Rower Data fields to send (RowerFields mask); 0 = the base layout
     @Volatile var fillLitres = 17.0       // the monitor's fill setting; it only scales the watts
     @Volatile var running = false
     @Volatile var status = "Stopped"
@@ -35,7 +35,6 @@ class SensorService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private var peripheral: SensorPeripheral? = null
-    private var power: SensorPeripheral? = null
     private val manual = ManualRower()
     private val decoder = S4Decoder()
     private val stats = SessionStats()
@@ -84,28 +83,19 @@ class SensorService : Service() {
         val dis = deviceInfo("Rower")
         val p = SensorPeripheral(
             this, "Rower", listOf(ftmsService(), dis.first), Uuids.ROWER_DATA,
-            mapOf(Uuids.FTMS_FEATURE to Ble.ftmsFeature()) + dis.second, main,
+            mapOf(Uuids.FTMS_FEATURE to Ble.ftmsFeature(Hub.fields)) + dis.second, main,
             // FTMS service data: flags (machine available) + machine type, little endian (rower = bit 4 = 0x0010;
             // indoor bike would be bit 5 = 0x0020)
             advertisedData = byteArrayOf(0x01, 0x10, 0x00),
         ) { refresh() }
         peripheral = p
-        if (Hub.cps) {
-            val pdis = deviceInfo("Power sensor")
-            power = SensorPeripheral(
-                this, "Power", listOf(powerService(), pdis.first), Uuids.CPS_MEASUREMENT,
-                mapOf(Uuids.CPS_FEATURE to Ble.cpsFeature(), Uuids.SENSOR_LOCATION to Ble.sensorLocation()) + pdis.second,
-                main,
-            ) { refresh() }
-        }
         if (Hub.useRower) {
             decoder.reset()
             link = RowerLink(this, decoder).also { it.start() }
         }
         p.start()
-        power?.start()
         refresh()
-        if (p.failed && (power == null || power!!.failed)) {
+        if (p.failed) {
             shutdown()
             refresh()
             stopSelf()
@@ -128,14 +118,6 @@ class SensorService : Service() {
         )
     }
 
-    private fun powerService(): BluetoothGattService {
-        val s = BluetoothGattService(Uuids.CYCLING_POWER, BluetoothGattService.SERVICE_TYPE_PRIMARY)
-        s.addCharacteristic(notifyChar(Uuids.CPS_MEASUREMENT, false))
-        s.addCharacteristic(readChar(Uuids.CPS_FEATURE))
-        s.addCharacteristic(readChar(Uuids.SENSOR_LOCATION))
-        return s
-    }
-
     private fun ftmsService(): BluetoothGattService {
         val s = BluetoothGattService(Uuids.FTMS, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         s.addCharacteristic(notifyChar(Uuids.ROWER_DATA, false))
@@ -151,19 +133,20 @@ class SensorService : Service() {
             val raw = if (Hub.useRower) {
                 decoder.snapshot(System.nanoTime() / 1e9)
             } else {
-                val t = if (Hub.paused) Targets(0, 0.0) else Targets(Hub.powerW, Hub.strokeRate)
+                val t = if (Hub.paused) Targets(0.0, 0.0) else Targets(Hub.speedMps, Hub.strokeRate)
                 manual.advance(t, TICK_MS.toDouble(), Hub.fillLitres)
                 manual.snapshot()
             }
             stats.add(raw, TICK_MS / 1000.0)
             val snap = stats.extend(raw)
-            if (tick % 4 == 0) peripheral?.send(Ble.rowerData(snap))
-            power?.send(Ble.cpsMeasurement(snap.powerW, snap.strokeCount, snap.crankTicks))   // 4 Hz, like a power meter
+            val packet = Ble.rowerData(snap, Hub.fields)
+            if (tick % 4 == 0) peripheral?.send(packet)
             tick++
             val pace = Ble.paceS500(snap.speedMps)
             Hub.sent = "${"%.1f".format(snap.strokeRateSpm)} spm, ${snap.powerW} W, " +
                 (if (pace == 0) "-- /500 m" else "%d:%02d /500 m".format(pace / 60, pace % 60)) +
-                ", ${snap.distanceM.toInt()} m, ${snap.strokeCount} strokes"
+                ", ${snap.distanceM.toInt()} m, ${snap.strokeCount} strokes" +
+                "\nRower packet: ${packet.size} bytes, flags 0x%04X".format((packet[0].toInt() and 0xFF) or ((packet[1].toInt() and 0xFF) shl 8))
             refresh()
             main.postDelayed(this, TICK_MS)
         }
@@ -172,11 +155,10 @@ class SensorService : Service() {
     /** The status line: the Bluetooth side, plus the USB rower when it is the source. */
     private fun refresh() {
         val p = peripheral
-        val parts = listOfNotNull(p, power)
         Hub.status = when {
             p == null -> "Stopped"
-            !Hub.running && parts.none { it.failed } -> "Stopped"
-            else -> parts.joinToString("  |  ") { it.summary } + (link?.let { "  |  ${it.status}" } ?: "")
+            !Hub.running && !p.failed -> "Stopped"
+            else -> p.summary + (link?.let { "  |  ${it.status}" } ?: "")
         }
     }
 
@@ -187,8 +169,6 @@ class SensorService : Service() {
         link?.stop()
         link = null
         peripheral?.stop()
-        power?.stop()
-        power = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
     }
