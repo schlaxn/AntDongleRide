@@ -35,7 +35,7 @@ Application id `app.sensorsim`, title "BLE Sensor Sim".
   has every GATT callback and every `NOTIFY` packet in hex.
 - Tests: 28 JVM tests (`EncodersTest` 17, `S4Test` 11). Byte layouts are hand-computed from the Bluetooth specs.
 
-## 3. Verified on hardware (MyWhoosh on the laptop, 04:D3:B0:FF:EE:47, MTU 517)
+## 3. Verified on hardware (MyWhoosh on the laptop, MTU 517)
 - MyWhoosh finds the rower, pairs, reads Feature and Device Information, subscribes to Rower Data and the control point, and writes
   control-point commands (0x00 request control, 0x11 bike simulation, 0x07 start/resume).
 - With the base layout (all optional fields off) MyWhoosh showed correct power and pace for the slider values in the 12 Nov test.
