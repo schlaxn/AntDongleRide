@@ -62,6 +62,12 @@ class EncodersTest {
         assertArrayEquals(b(0x80, 0x08, 0x01), Ble.controlPointReply(0x08))
     }
 
+    @Test fun statusFollowsStartAndStop() {
+        assertArrayEquals(b(0x04), Ble.statusFor(0x07))   // started or resumed by the user
+        assertArrayEquals(b(0x02), Ble.statusFor(0x08))   // stopped or paused by the user
+        assertEquals(null, Ble.statusFor(0x00))           // request control: no status
+    }
+
     @Test fun controlPointRefusesTheRest() {
         assertArrayEquals(b(0x80, 0x11, 0x02), Ble.controlPointReply(0x11))  // bike simulation
         assertArrayEquals(b(0x80, 0x05, 0x02), Ble.controlPointReply(0x05))  // target power

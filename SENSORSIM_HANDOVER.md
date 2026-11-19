@@ -17,6 +17,9 @@ Application id `app.sensorsim`, title "BLE Sensor Sim".
   rower = 0x0010). Rower Data base layout (flags 0x082C, 14 bytes, once a second): stroke rate, stroke count, total distance, pace, power,
   elapsed time. The control point accepts request control, reset, start/resume, stop/pause and refuses everything else (0x02).
   There is no Cycling Power sensor any more: it was a workaround based on a wrong reading (section 3).
+- **Bike profile** (profile picker, "Bike"): only the Cycling Power sensor (power and crank cadence, 4 Hz), like a power pedal.
+  No FTMS service in this mode. Cadence = stroke rate x the cadence factor. Chosen because the rower's power cannot be set
+  for MyWhoosh. Tried and dropped: an FTMS indoor bike next to it (MyWhoosh then found two A33 devices).
 - **Optional Rower Data fields** (checkboxes, `RowerFields`): average power and energy (an estimate, 25 % efficiency, not measured) are
   offered; a fifth switch adds cadence and energy to the feature list (read once at connect, needs a restart). Average stroke rate and
   average pace are implemented in `Ble.rowerData` but NOT offered, because MyWhoosh misreads the packet with them (section 3).
@@ -35,7 +38,11 @@ Application id `app.sensorsim`, title "BLE Sensor Sim".
 ## 3. Verified on hardware (MyWhoosh on the laptop, 04:D3:B0:FF:EE:47, MTU 517)
 - MyWhoosh finds the rower, pairs, reads Feature and Device Information, subscribes to Rower Data and the control point, and writes
   control-point commands (0x00 request control, 0x11 bike simulation, 0x07 start/resume).
-- With the base layout (all optional fields off) MyWhoosh shows correct power and pace for the slider values.
+- With the base layout (all optional fields off) MyWhoosh showed correct power and pace for the slider values in the 12 Nov test.
+  **Retested 19 Nov (rower profile, base flags 0x082C):** MyWhoosh shows the trainer as connected, with speed and stroke rate,
+  but no power, although the packet carries it (e.g. `2c 08 20 1f 00 18 01 00 9e 00 38 00 50 00` = 56 W). The same power as
+  Cycling Power is shown. Not resolved; the user decided to use the bike profile for rides with power. A bug report to MyWhoosh
+  was drafted but not sent.
 - **MyWhoosh's FTMS rower parser does not handle two optional fields.** Switching them on one at a time: average stroke rate (flag bit 1)
   makes MyWhoosh show a constant 2500 W (every later field shifts by one byte, the power is read from the wrong place and clipped);
   average pace (bit 4) makes it show the average pace in seconds as the power (120 instead of 150 W). Average power (bit 6) and energy
@@ -78,6 +85,9 @@ all tests. The same watch works with real power pedals and generic BLE speed/cad
   slider values are not saved.
 
 ## 6. Next steps (in order)
+0. MyWhoosh with the rower (21:10 test, laptop as the client): the start (0x07) was accepted and answered with status 0x04. Power
+   was missing when the average power and energy fields were on (flags 0x096C); test with them off (base flags 0x082C).
+   Trainer: "disconnected" in MyWhoosh with the rower: the trainer slot wants a bike. Test the bike profile next.
 1. Rower test: plug the S4 into the phone with the OTG adapter, tick "Use the USB rower", start, allow the USB dialog, row a few strokes;
    check the status line ("USB rower: streaming") and the values in the app, then in MyWhoosh.
 2. Find out which Rower Data fields MyWhoosh really uses (power, pace, stroke rate, distance, time) with the manual sliders, one at a time.

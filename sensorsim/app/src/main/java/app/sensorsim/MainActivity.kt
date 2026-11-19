@@ -198,11 +198,11 @@ class MainActivity : Activity() {
                 val f = 2.0 + it / 100.0
                 "x%.2f  (a stroke rate of 30 spm gives %.0f rpm)".format(f, 30 * f)
             }) { Hub.cadenceFactor = 2.0 + it / 100.0 }
-        // logarithmic: 1/8 at the left, 1 in the middle, 8 at the right; each step is the same ratio
-        slider(factorBox, "Speed factor (1/8 to 8): multiplies the measured speed (USB rower) or the manual pace; the watts follow it",
-            600, (Math.round((Math.log(Hub.paceFactor) / Math.log(2.0) + 3.0) * 100)).toInt().coerceIn(0, 600), {
-                "x%.3f  (the watts change with its cube)".format(Math.pow(2.0, it / 100.0 - 3.0))
-            }) { Hub.paceFactor = Math.pow(2.0, it / 100.0 - 3.0) }
+        // logarithmic: 1/2 at the left, 1 in the middle, 2 at the right; each step is the same ratio
+        slider(factorBox, "Speed factor (1/2 to 2): multiplies the measured speed (USB rower) or the manual pace; the watts follow it (cube: 1/8 to 8)",
+            200, (Math.round((Math.log(Hub.paceFactor) / Math.log(2.0) + 1.0) * 100)).toInt().coerceIn(0, 200), {
+                "x%.3f  (the watts change with its cube)".format(Math.pow(2.0, it / 100.0 - 1.0))
+            }) { Hub.paceFactor = Math.pow(2.0, it / 100.0 - 1.0) }
         // pace from 3:00 (slow, left) to 1:30 (fast, right) in one-second steps; speed and power follow from it
         refreshSpeedLabel = slider(paceBox, "Pace per 500 m (speed and power follow from it, as on the real rower)", 90,
             180 - Hub.paceS, {

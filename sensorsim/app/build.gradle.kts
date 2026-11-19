@@ -49,5 +49,6 @@ android {
 }
 
 dependencies {
+    implementation("com.garmin:fit:21.176.0")   // the same Garmin FIT SDK as android/, for the session .fit file
     testImplementation("junit:junit:4.13.2")
 }

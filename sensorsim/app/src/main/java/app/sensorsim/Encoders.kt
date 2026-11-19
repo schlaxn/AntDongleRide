@@ -18,6 +18,7 @@ object Uuids {
     val FTMS_FEATURE = u(0x2ACC)
     val ROWER_DATA = u(0x2AD1)
     val FTMS_CONTROL_POINT = u(0x2AD9)
+    val FTMS_STATUS = u(0x2ADA)
 
     val DEVICE_INFO = u(0x180A)
     val MANUFACTURER = u(0x2A29)
@@ -159,6 +160,16 @@ object Ble {
 
     /** Sensor Location 0x2A5D: 13 = rear hub. */
     fun sensorLocation(): ByteArray = byteArrayOf(13)
+
+    /**
+     * Fitness Machine Status 0x2ADA (spec 4.17): one op code, no parameter. 0x04 = started or resumed by the user,
+     * 0x02 = stopped or paused by the user. Sent after an accepted Start or Stop on the control point.
+     */
+    fun statusFor(controlOp: Int): ByteArray? = when (controlOp) {
+        0x07 -> byteArrayOf(0x04)   // start or resume
+        0x08 -> byteArrayOf(0x02)   // stop or pause
+        else -> null
+    }
 
     /**
      * Fitness Machine Feature 0x2ACC. Base 0x5024 as in the version that worked: total distance (bit 2), pace (5),

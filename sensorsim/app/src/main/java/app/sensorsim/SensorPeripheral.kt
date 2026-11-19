@@ -74,6 +74,14 @@ class SensorPeripheral(
     private val connected = LinkedHashSet<BluetoothDevice>()
     private val subscribed = LinkedHashSet<BluetoothDevice>()
     private val cpSubscribed = LinkedHashSet<BluetoothDevice>()  // control point indications (FTMS)
+    private val statusSubscribed = LinkedHashSet<BluetoothDevice>()  // Fitness Machine Status notifications (FTMS)
+
+    /** The subscriber set of a characteristic: the data, the control point or the status. */
+    private fun subscribersOf(uuid: UUID): LinkedHashSet<BluetoothDevice> = when (uuid) {
+        notifyUuid -> subscribed
+        Uuids.FTMS_STATUS -> statusSubscribed
+        else -> cpSubscribed
+    }
 
     val summary: String
         get() = buildString {
@@ -115,6 +123,7 @@ class SensorPeripheral(
         connected.clear()
         subscribed.clear()
         cpSubscribed.clear()
+        statusSubscribed.clear()
         if (!failed) state = "Off"
     }
 
@@ -145,21 +154,48 @@ class SensorPeripheral(
         }
     }
 
-    /** FTMS control point: accept "request control" (0x00) and "reset" (0x01), refuse the rest; apps wait for the reply. */
+    /** FTMS control point: answers every write with an indication (0x80, op, result); start/stop also send a status. */
     private fun indicateControlPoint(device: BluetoothDevice, c: BluetoothGattCharacteristic, op: Byte) {
         val s = server ?: return
-        if (!cpSubscribed.contains(device)) return
-        val reply = Ble.controlPointReply(op.toInt() and 0xFF)
-        try {
-            if (Build.VERSION.SDK_INT >= 33) s.notifyCharacteristicChanged(device, c, true, reply)
-            else {
-                @Suppress("DEPRECATION")
-                c.value = reply
-                @Suppress("DEPRECATION")
-                s.notifyCharacteristicChanged(device, c, true)
+        val code = op.toInt() and 0xFF
+        if (cpSubscribed.contains(device)) {
+            val reply = Ble.controlPointReply(code)
+            try {
+                if (Build.VERSION.SDK_INT >= 33) s.notifyCharacteristicChanged(device, c, true, reply)
+                else {
+                    @Suppress("DEPRECATION")
+                    c.value = reply
+                    @Suppress("DEPRECATION")
+                    s.notifyCharacteristicChanged(device, c, true)
+                }
+            } catch (e: SecurityException) {
+                fail("Bluetooth permission missing")
+                return
             }
-        } catch (e: SecurityException) {
-            fail("Bluetooth permission missing")
+        }
+        // a start or stop the app accepted: tell the status subscribers (spec: Fitness Machine Status)
+        val status = Ble.statusFor(code)
+        if (status != null && Ble.controlPointReply(code)[2].toInt() == 0x01) notifyStatus(status)
+    }
+
+    /** Notify the Fitness Machine Status subscribers (0x2ADA). */
+    private fun notifyStatus(value: ByteArray) {
+        val s = server ?: return
+        val c = service.getCharacteristic(Uuids.FTMS_STATUS) ?: return
+        Log.i(TAG, "$label STATUS ${value.joinToString("") { "%02x".format(it) }} to ${statusSubscribed.size} subscribers")
+        for (d in statusSubscribed.toList()) {
+            try {
+                if (Build.VERSION.SDK_INT >= 33) s.notifyCharacteristicChanged(d, c, false, value)
+                else {
+                    @Suppress("DEPRECATION")
+                    c.value = value
+                    @Suppress("DEPRECATION")
+                    s.notifyCharacteristicChanged(d, c, false)
+                }
+            } catch (e: SecurityException) {
+                fail("Bluetooth permission missing")
+                return
+            }
         }
     }
 
@@ -236,6 +272,7 @@ class SensorPeripheral(
                     connected.remove(device)
                     subscribed.remove(device)
                     cpSubscribed.remove(device)
+                    statusSubscribed.remove(device)
                 }
                 if (state == "Advertising") restartAdvertising()
                 onChange()
@@ -258,7 +295,7 @@ class SensorPeripheral(
             Log.i(TAG, "$label WRITE descriptor ${d.uuid} of ${d.characteristic.uuid} from ${device.address} value=${value.joinToString("") { "%02x".format(it) }}")
             main.post {
                 val on = value.isNotEmpty() && value[0].toInt() != 0
-                val set = if (d.characteristic.uuid == notifyUuid) subscribed else cpSubscribed
+                val set = subscribersOf(d.characteristic.uuid)
                 if (on) set.add(device) else set.remove(device)
                 if (responseNeeded) server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
                 onChange()
@@ -268,7 +305,7 @@ class SensorPeripheral(
         override fun onDescriptorReadRequest(device: BluetoothDevice, requestId: Int, offset: Int, d: BluetoothGattDescriptor) {
             Log.i(TAG, "$label READ descriptor ${d.uuid} of ${d.characteristic.uuid} from ${device.address}")
             main.post {
-                val on = (if (d.characteristic.uuid == notifyUuid) subscribed else cpSubscribed).contains(device)
+                val on = subscribersOf(d.characteristic.uuid).contains(device)
                 server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, byteArrayOf(if (on) 1 else 0, 0))
             }
         }
